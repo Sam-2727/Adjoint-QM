@@ -59,7 +59,7 @@ class GaussianEnvelopeMLP(nn.Module):
         self.raw_alpha = nn.Parameter(raw_alpha.clone().detach())
 
         layers: list[nn.Module] = []
-        in_features = self.dim
+        in_features = self.feature_map.output_dim(self.dim)
         for width in hidden_layers:
             layers.append(nn.Linear(in_features, int(width), dtype=dtype))
             layers.append(activation())

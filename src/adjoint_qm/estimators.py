@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 import torch
 
-from .potentials import HarmonicOscillatorPotential, Potential
+from .potentials import Potential
 
 
 def trapezoid_grid(
@@ -162,7 +162,9 @@ def quadrature_observables(
         local_mean = torch.sum(density_weights * e_local)
         local_var = torch.sum(density_weights * (e_local - local_mean) ** 2)
         parity = parity_residual(model, x)
-        virial = 2.0 * (kinetic.detach() - potential_energy.detach())
+        virial_density = potential.virial(x)
+        virial_expectation = torch.sum(density_weights * virial_density)
+        virial = 2.0 * kinetic.detach() - virial_expectation.detach()
 
     return QuadratureObservables(
         energy=float(energy.detach()),
@@ -184,9 +186,17 @@ class VMCObservables:
     x_mean: float
     x2: float
     x4: float
+    r4: float
+    kinetic: float
+    potential: float
     local_energy_mean: float
     local_energy_std: float
     local_energy_stderr: float
+    virial_residual: float
+    coordinate_mean_abs_max: float
+    coordinate_variance_mean: float
+    coordinate_variance_std: float
+    coordinate_offdiag_abs_max: float
 
 
 def vmc_observables(
@@ -196,15 +206,37 @@ def vmc_observables(
 ) -> VMCObservables:
     """Compute sample averages and local-energy diagnostics."""
 
+    if samples.ndim != 2:
+        raise ValueError("samples must have shape (sample_count, dim)")
+    if samples.shape[0] < 2:
+        raise ValueError("at least two samples are required for covariance diagnostics")
+
     e_local = local_energy(model, potential, samples)
+    x_req = samples.detach().clone().requires_grad_(True)
+    grad = grad_log_psi(model, x_req)
+    kinetic_density = 0.5 * torch.sum(grad**2, dim=-1)
+    potential_density = potential(x_req)
+    virial_density = potential.virial(x_req)
+
     with torch.no_grad():
         n = samples.shape[0]
         e_std = torch.std(e_local, unbiased=True)
+        coordinate_mean = torch.mean(samples, dim=0)
+        centered = samples - coordinate_mean
+        covariance = centered.T @ centered / (n - 1)
+        covariance_diag = torch.diag(covariance)
+        covariance_offdiag = covariance - torch.diag(covariance_diag)
+        r2_values = torch.sum(samples**2, dim=-1)
+        kinetic = torch.mean(kinetic_density)
+        virial = 2.0 * kinetic - torch.mean(virial_density)
         return VMCObservables(
             sample_count=int(n),
             x_mean=float(torch.mean(samples[:, 0]).detach()),
-            x2=float(torch.mean(torch.sum(samples**2, dim=-1)).detach()),
+            x2=float(torch.mean(r2_values).detach()),
             x4=float(torch.mean(torch.sum(samples**4, dim=-1)).detach()),
+            r4=float(torch.mean(r2_values**2).detach()),
+            kinetic=float(kinetic.detach()),
+            potential=float(torch.mean(potential_density).detach()),
             local_energy_mean=float(torch.mean(e_local).detach()),
             local_energy_std=float(e_std.detach()),
             local_energy_stderr=float(
@@ -215,6 +247,11 @@ def vmc_observables(
                     )
                 ).detach()
             ),
+            virial_residual=float(virial.detach()),
+            coordinate_mean_abs_max=float(torch.max(torch.abs(coordinate_mean)).detach()),
+            coordinate_variance_mean=float(torch.mean(covariance_diag).detach()),
+            coordinate_variance_std=float(torch.std(covariance_diag, unbiased=False).detach()),
+            coordinate_offdiag_abs_max=float(torch.max(torch.abs(covariance_offdiag)).detach()),
         )
 
 
@@ -233,9 +270,72 @@ def exact_harmonic_benchmarks(omega: float = 1.0) -> dict[str, float]:
     }
 
 
+def exact_isotropic_harmonic_benchmarks(
+    dim: int,
+    omega: float = 1.0,
+) -> dict[str, float]:
+    """Exact ground-state observables for the D-dimensional isotropic oscillator."""
+
+    if dim < 1:
+        raise ValueError("dim must be positive")
+    if omega <= 0:
+        raise ValueError("omega must be positive")
+    return {
+        "energy": 0.5 * dim * omega,
+        "kinetic": 0.25 * dim * omega,
+        "potential": 0.25 * dim * omega,
+        "r2": dim / (2.0 * omega),
+        "r4": dim * (dim + 2.0) / (4.0 * omega**2),
+        "coordinate_variance": 1.0 / (2.0 * omega),
+        "coordinate_x4_sum": 3.0 * dim / (4.0 * omega**2),
+    }
+
+
 def harmonic_correlator(tau: torch.Tensor, omega: float = 1.0) -> torch.Tensor:
     """Exact Euclidean two-point function ``<x(tau) x(0)>``."""
 
     if omega <= 0:
         raise ValueError("omega must be positive")
     return torch.exp(-omega * tau) / (2.0 * omega)
+
+
+def quartic_oscillator_perturbation_benchmarks(
+    omega: float = 1.0,
+    coupling: float = 0.0,
+) -> dict[str, float]:
+    r"""Weak-coupling perturbative benchmarks for ``0.5 omega^2 x^2 + g x^4``.
+
+    The expansion is for
+
+    ``H = p^2/2 + omega^2 x^2/2 + coupling * x^4``.
+
+    Energies are included through second order:
+
+    ``E0 = omega/2 + 3g/(4 omega^2) - 21g^2/(8 omega^5) + O(g^3)``.
+
+    Moment estimates are derivative consequences of this energy expansion via
+    Hellmann-Feynman and are only perturbative checks.
+    """
+
+    if omega <= 0:
+        raise ValueError("omega must be positive")
+    if coupling < 0:
+        raise ValueError("coupling must be non-negative for this stable benchmark")
+
+    energy_order0 = 0.5 * omega
+    energy_order1 = energy_order0 + 3.0 * coupling / (4.0 * omega**2)
+    energy_order2 = energy_order1 - 21.0 * coupling**2 / (8.0 * omega**5)
+    x2_order0 = 1.0 / (2.0 * omega)
+    x2_order1 = x2_order0 - 3.0 * coupling / (2.0 * omega**4)
+    x4_order0 = 3.0 / (4.0 * omega**2)
+    x4_order1 = x4_order0 - 21.0 * coupling / (4.0 * omega**5)
+
+    return {
+        "energy_order0": energy_order0,
+        "energy_order1": energy_order1,
+        "energy_order2": energy_order2,
+        "x2_order0": x2_order0,
+        "x2_order1": x2_order1,
+        "x4_order0": x4_order0,
+        "x4_order1": x4_order1,
+    }

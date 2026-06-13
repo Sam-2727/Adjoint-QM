@@ -1,18 +1,30 @@
 """Neural variational tools for quantum-mechanics benchmarks."""
 
 from .ansatz import GaussianEnvelopeMLP
+from .exact_diagonalization import (
+    BasisDiagonalizationResult,
+    SeparableDiagonalizationResult,
+    align_wavefunction_sign,
+    diagonalize_quartic_oscillator,
+    diagonalize_separable_quartic_oscillator,
+    evaluate_basis_wavefunctions,
+    harmonic_basis_functions_1d,
+    quartic_oscillator_hamiltonian_matrix,
+)
 from .estimators import (
     exact_harmonic_benchmarks,
+    exact_isotropic_harmonic_benchmarks,
     harmonic_correlator,
     local_energy,
     parity_residual,
     quadrature_energy,
     quadrature_observables,
+    quartic_oscillator_perturbation_benchmarks,
     trapezoid_grid,
     vmc_observables,
 )
-from .features import EvenFeatureMap, FeatureMap
-from .potentials import HarmonicOscillatorPotential, Potential
+from .features import EvenFeatureMap, FeatureMap, RadialFeatureMap
+from .potentials import HarmonicOscillatorPotential, Potential, QuarticOscillatorPotential
 from .sampler import MetropolisResult, metropolis_sample
 from .time_evolution import (
     KrylovSpectrum,
@@ -21,6 +33,7 @@ from .time_evolution import (
     krylov_correlator,
     krylov_spectrum,
     lanczos_tridiagonal,
+    normalized_wavefunction_values,
     position_correlator_time_evolution_1d,
     position_source_state_1d,
     schrodinger_hamiltonian_action_1d,
@@ -28,34 +41,51 @@ from .time_evolution import (
     weighted_inner,
 )
 from .training import TrainingRecord, train_quadrature
+from .vmc import VMCTrainingRecord, train_vmc_metropolis, vmc_score_function_loss
 
 __all__ = [
     "EvenFeatureMap",
     "FeatureMap",
     "GaussianEnvelopeMLP",
+    "RadialFeatureMap",
+    "BasisDiagonalizationResult",
+    "SeparableDiagonalizationResult",
+    "align_wavefunction_sign",
+    "diagonalize_quartic_oscillator",
+    "diagonalize_separable_quartic_oscillator",
+    "evaluate_basis_wavefunctions",
     "harmonic_correlator",
+    "harmonic_basis_functions_1d",
     "HarmonicOscillatorPotential",
     "KrylovSpectrum",
     "LanczosResult",
     "MetropolisResult",
     "Potential",
+    "QuarticOscillatorPotential",
     "TrainingRecord",
+    "VMCTrainingRecord",
     "dirichlet_grid_1d",
     "exact_harmonic_benchmarks",
+    "exact_isotropic_harmonic_benchmarks",
     "krylov_correlator",
     "krylov_spectrum",
     "lanczos_tridiagonal",
     "local_energy",
     "metropolis_sample",
+    "normalized_wavefunction_values",
     "parity_residual",
     "position_correlator_time_evolution_1d",
     "position_source_state_1d",
     "quadrature_energy",
     "quadrature_observables",
+    "quartic_oscillator_hamiltonian_matrix",
+    "quartic_oscillator_perturbation_benchmarks",
     "schrodinger_hamiltonian_action_1d",
     "train_quadrature",
+    "train_vmc_metropolis",
     "tridiagonal_matrix",
     "trapezoid_grid",
+    "vmc_score_function_loss",
     "vmc_observables",
     "weighted_inner",
 ]

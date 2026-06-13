@@ -8,3 +8,10 @@ This file tracks papers that materially shape the project.
   Project role: primary target for reproducing Euclidean two-point correlator
   bounds, adjoint-sector gaps, and transition matrix elements in the ungauged
   one-matrix quantum mechanics.
+
+- Paul Okun and Kieron Burke,
+  "Uncommonly accurate energies for the general quartic oscillator,"
+  arXiv:2007.04762v2, submitted 2020-07-09, revised 2020-10-23.
+  Project role: high-precision non-perturbative benchmark for quartic
+  oscillator ground and excited energies, especially the lambda=-1 convention
+  matching `V(x)=x^2/2+x^4/4`.
