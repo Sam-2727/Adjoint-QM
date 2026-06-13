@@ -1,0 +1,355 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+
+\title{Codex Notes: Neural Wavefunction Plan for Reproducing arXiv:2511.08560}
+\author{codex}
+\date{2026-06-12}
+
+\begin{document}
+\maketitle
+
+\section{Scope and status}
+
+These notes record an early-stage plan for using neural variational wavefunctions
+to reproduce observables studied in Cho, Gabai, Lin, Yeh, and Zheng,
+\emph{Bootstrapping Euclidean Two-point Correlators},
+\href{https://arxiv.org/abs/2511.08560}{arXiv:2511.08560}.
+The paper itself does not use neural wavefunctions.  It derives rigorous
+bootstrap bounds on Euclidean two-point correlators and then extracts low-lying
+adjoint-sector gaps and matrix elements from those bounds.
+
+Therefore the proposed neural calculation is not a literal reproduction of the
+paper's method.  It is an independent variational calculation of the same
+spectral data and correlators.  Any result from this route should be described
+as approximate unless accompanied by controlled convergence, exact benchmarks,
+and independent checks.
+
+\section{Target model}
+
+The target system is the ungauged one-matrix quantum mechanics with Hamiltonian
+\begin{equation}
+  H = \frac{N}{2}\,{\rm tr}\left(\frac{1}{2}P^2 + V(X)\right),
+  \qquad
+  V(x) = \frac{1}{2}x^2 + g x^4 ,
+\end{equation}
+using the paper's convention
+\begin{equation}
+  {\rm tr}\,O = \frac{1}{N}{\rm Tr}\,O,\qquad
+  [X_{ab},P_{cd}] = \frac{i}{N}\delta_{ad}\delta_{bc}.
+\end{equation}
+The Hilbert space is ungauged, so non-singlet representations of \(U(N)\) are
+included.  The ground state is expected to be a singlet, while the correlator
+\(\langle \Omega|{\rm tr}\,X(\tau)X(0)|\Omega\rangle\) probes adjoint states.
+At large \(N\), the adjoint spectrum is benchmarked by the
+Marchesini--Onofri singular integral equation.
+
+\section{Spectral reconstruction of correlators}
+
+The neural goal should be to approximate the ingredients in the spectral
+decomposition
+\begin{equation}
+  G_O(\tau)
+  =
+  \langle \Omega|O(\tau)O(0)|\Omega\rangle
+  =
+  \sum_n |\langle \Omega|O|n\rangle|^2
+  e^{-(E_n-E_0)\tau},
+\end{equation}
+where \(|n\rangle\) lies in the representation selected by \(O\).  For
+\(O={\rm tr}\,X\) or \(X_{ab}\), this is the adjoint sector.  The deliverables
+are therefore:
+\begin{enumerate}
+  \item \(E_0\) and ground-state diagnostics;
+  \item adjoint gaps \(\Delta_n=E_n-E_0\);
+  \item transition matrix elements \(|\langle \Omega|O|n\rangle|^2\);
+  \item reconstructed correlators with error estimates and comparison to
+        bootstrap/Marchesini--Onofri data.
+\end{enumerate}
+
+\section{Recommended architecture}
+
+The first serious implementation should not use an unconstrained dense neural
+network on the \(N^2\) matrix entries.  It should build in the \(U(N)\) symmetry
+from the start.
+
+\subsection{Ground-state singlet ansatz}
+
+For the singlet ground state, work first in eigenvalue variables.  After
+absorbing the Vandermonde factor, the singlet sector maps to an antisymmetric
+\(N\)-fermion problem.  A suitable ansatz is a Slater--Jastrow/backflow
+wavefunction
+\begin{equation}
+  \Phi_\theta(\lambda_1,\ldots,\lambda_N)
+  =
+  \det[\varphi_i^\theta(y_j)]\,
+  \exp\!\left[
+    \sum_i u_\theta(\lambda_i)
+    + \sum_{i<j} v_\theta(\lambda_i,\lambda_j)
+  \right],
+\end{equation}
+with backflow coordinates
+\begin{equation}
+  y_i = \lambda_i + b_\theta(\lambda_i,\{\lambda_j\}_{j\ne i}).
+\end{equation}
+The one-body orbitals should be initialized to harmonic-oscillator orbitals for
+the \(g=0\) benchmark.  This gives the architecture the exact solvable limit as
+a natural starting point.
+
+\subsection{Adjoint excited-sector ansatz}
+
+For finite \(N\), an adjoint wavefunction should transform equivariantly,
+\begin{equation}
+  \Psi_{ab}(UXU^\dagger)=U_{ac}\Psi_{cd}(X)U^\dagger_{db}.
+\end{equation}
+A conservative equivariant form is
+\begin{equation}
+  \Psi^{(n)}_{ab}(X)
+  =
+  \Psi_{0,\theta}(X)\,
+  \left[
+    \sum_{k=0}^{K} c^{(n)}_k(s_\theta(X))
+    \left(X^k-\frac{1}{N}{\rm Tr}(X^k)\mathbf{1}\right)
+  \right]_{ab},
+\end{equation}
+where \(s_\theta(X)\) denotes invariant trace features such as
+\({\rm tr}\,X^m\).  This form preserves the adjoint transformation law and
+enforces tracelessness.  Parity under \(X\mapsto -X\) should be imposed by
+choosing even or odd powers according to the desired \(Z_2\) sector.
+
+For large \(N\), it may be more efficient and more directly comparable to the
+paper to solve the Marchesini--Onofri problem with a one-dimensional spectral
+or neural basis for \(\psi_n(x)\), using the large-\(N\) eigenvalue density as
+input.  That calculation should be treated as a benchmark and diagnostic for
+the full neural variational approach.
+
+\section{Training objectives}
+
+Ground-state training should use variational Monte Carlo with the Rayleigh
+quotient
+\begin{equation}
+  E_\theta =
+  \frac{\langle \Psi_\theta|H|\Psi_\theta\rangle}
+       {\langle \Psi_\theta|\Psi_\theta\rangle},
+\end{equation}
+estimated with samples from \(|\Psi_\theta|^2\).  Each reported energy must
+include sample count, random seed, acceptance rate or effective sample size,
+and an uncertainty estimate.
+
+Excited states should be trained by minimizing the Hamiltonian in a symmetry
+sector with explicit orthogonality constraints.  In practice this means solving
+the generalized eigenvalue problem in a learned basis or adding a rigorously
+tracked penalty
+\begin{equation}
+  {\cal L}_n =
+  E_n[\Psi_n]
+  +
+  \sum_{m<n}\alpha_m
+  |\langle \Psi_m|\Psi_n\rangle|^2,
+\end{equation}
+with overlaps measured from independent Monte Carlo samples.  A learned-basis
+generalized eigenvalue solve is preferred once the infrastructure exists,
+because it provides clearer orthogonality diagnostics.
+
+\section{Implemented harmonic oscillator benchmark}
+
+As the first executable benchmark, the repository now includes a PyTorch
+implementation of the one-dimensional quadratic Hamiltonian
+\begin{equation}
+  H = -\frac{1}{2}\frac{d^2}{dx^2}
+      +\frac{1}{2}\omega^2 x^2 ,
+\end{equation}
+in units \(\hbar=m=1\).  This example is deliberately simpler than the
+finite-\(N\) matrix models.  Its purpose is to verify the wavefunction,
+autodifferentiation, quadrature, and Monte Carlo diagnostics against exact
+answers before adding matrix degrees of freedom.
+
+\subsection{Ansatz and symmetry}
+
+The implemented ground-state ansatz is a real positive wavefunction written as
+\begin{equation}
+  \log \psi_\theta(x)
+  =
+  -\frac{1}{2}\alpha x^2 + f_\theta(x^2),
+  \qquad \alpha>0 .
+\end{equation}
+The Gaussian envelope supplies normalizable tails, while the neural correction
+uses the feature \(x^2\).  Therefore
+\begin{equation}
+  \psi_\theta(x)=\psi_\theta(-x)
+\end{equation}
+exactly, as required for the ground state of an even potential.  This is an
+implementation convenience, not a proof of correctness: it only builds in the
+known parity of this benchmark.
+
+\subsection{Energy functional}
+
+Quadrature training minimizes the Rayleigh quotient in gradient form,
+\begin{equation}
+  E_\theta =
+  \frac{
+    \int dx\,|\psi_\theta(x)|^2
+    \left[
+      \frac{1}{2}\left(\partial_x\log\psi_\theta(x)\right)^2
+      + V(x)
+    \right]
+  }{
+    \int dx\,|\psi_\theta(x)|^2
+  } .
+\end{equation}
+This is equivalent to the usual kinetic term
+\(\frac{1}{2}\int dx\,|\partial_x\psi_\theta|^2\), assuming the boundary term
+vanishes.  For the harmonic oscillator and the Gaussian envelope, this
+assumption is satisfied on the continuum problem; the finite quadrature grid
+must still be checked by increasing the cutoff and grid size.
+
+The local energy is computed diagnostically as
+\begin{equation}
+  E_L(x)
+  =
+  -\frac{1}{2}
+  \left[
+    \partial_x^2\log\psi_\theta(x)
+    +
+    \left(\partial_x\log\psi_\theta(x)\right)^2
+  \right]
+  + V(x).
+\end{equation}
+For an exact eigenstate, \(E_L(x)\) is constant and its variance vanishes.
+
+\subsection{Exact checks}
+
+For the exact ground state
+\begin{equation}
+  \psi_0(x) \propto \exp\left(-\frac{1}{2}\omega x^2\right),
+\end{equation}
+the benchmark values are
+\begin{equation}
+  E_0=\frac{\omega}{2},\qquad
+  \langle T\rangle=\langle V\rangle=\frac{\omega}{4},
+\end{equation}
+\begin{equation}
+  \langle x^2\rangle=\frac{1}{2\omega},
+  \qquad
+  \langle x^4\rangle=\frac{3}{4\omega^2}.
+\end{equation}
+The exact Euclidean two-point function is
+\begin{equation}
+  G(\tau)=\langle x(\tau)x(0)\rangle
+  =\frac{1}{2\omega}e^{-\omega\tau}.
+\end{equation}
+The implemented ground-state calculation directly checks \(G(0)=\langle
+x^2\rangle\).  Reconstructing nontrivial correlators from learned states
+requires excited-state wavefunctions and transition matrix elements, and is
+therefore outside this first benchmark.
+
+\subsection{Notebook and script workflow}
+
+The harmonic oscillator notebook is allowed to run training directly because
+the problem is one-dimensional, fast, and exactly benchmarked.  This should not
+be the default pattern for future matrix-model calculations.  For heavier or
+production-quality runs, training should be done by reproducible Python scripts
+that print diagnostics and, when appropriate, save structured result files.
+Notebooks should then load those saved results, compare them to analytic or
+bootstrap benchmarks, and present the interpretation.  This separation keeps
+expensive numerical work reproducible and avoids notebook-only artifacts.
+
+\subsection{Krylov time evolution for correlators}
+
+The repository now also includes a Krylov/Lanczos time-evolution utility for
+Euclidean correlators.  Given a normalized ground state and an operator \(O\),
+define the source state
+\begin{equation}
+  |\phi\rangle = O|\Omega\rangle .
+\end{equation}
+The correlator is
+\begin{equation}
+  G_O(\tau)
+  =
+  \langle \phi|e^{-\tau(H-E_0)}|\phi\rangle .
+\end{equation}
+Rather than computing all excited states, the Lanczos algorithm builds the
+Krylov space
+\begin{equation}
+  {\cal K}_m(H,|\phi\rangle)
+  =
+  {\rm span}\{|\phi\rangle,H|\phi\rangle,\ldots,H^{m-1}|\phi\rangle\}.
+\end{equation}
+After orthonormalization, the Hamiltonian is represented by a small tridiagonal
+matrix \(T_m\), giving the approximation
+\begin{equation}
+  G_O(\tau)
+  \approx
+  \|\phi\|^2
+  \left[
+    e^{-\tau(T_m-E_0)}
+  \right]_{00}.
+\end{equation}
+Diagonalizing \(T_m\) gives Ritz values \(\epsilon_j^{(m)}\) and first-component
+weights \(|u_{0j}|^2\), so equivalently
+\begin{equation}
+  G_O(\tau)
+  \approx
+  \|\phi\|^2
+  \sum_j |u_{0j}|^2
+  e^{-\tau(\epsilon_j^{(m)}-E_0)} .
+\end{equation}
+The values \(\epsilon_j^{(m)}\) are source-sector energy estimates, not a full
+diagonalization of the Hamiltonian.  Small or vanishing spectral weights mean
+that a Ritz value contributes weakly or not at all to the chosen correlator.
+For the harmonic oscillator with \(O=x\), the source \(x|\Omega\rangle\) is
+proportional to the first excited state, so the Krylov space closes after one
+direction in the continuum theory.  On a finite-difference grid this closure is
+approximate and should be checked by grid refinement.
+
+\section{Verification ladder}
+
+\begin{enumerate}
+  \item Harmonic oscillator, one degree of freedom: reproduce exact ground and
+        excited energies and correlators.
+  \item Harmonic one-matrix model at finite \(N\): reproduce the known Slater
+        determinant/eigenvalue result and the exact Euclidean correlator.
+  \item Quartic stable case \(g>0\): compare against exact diagonalization for
+        very small \(N\), where possible.
+  \item Large-\(N\) quartic model: compute the eigenvalue density and solve the
+        Marchesini--Onofri equation; this is the reference calculation for
+        adjoint gaps and matrix elements.
+  \item Neural finite-\(N\) runs: extrapolate \(N\to\infty\) and compare gaps,
+        matrix elements, and correlators against the bootstrap/MO values.
+  \item Near-critical negative coupling: only after the previous checks are
+        stable, attempt the paper's near-critical values such as
+        \(g=-0.075026\).  Claims here must state the metastability/large-\(N\)
+        assumptions clearly.
+\end{enumerate}
+
+\section{Repository structure to build later}
+
+A small, auditable codebase should separate:
+\begin{itemize}
+  \item \texttt{basis/}: eigenvalue, trace, and equivariant adjoint features;
+  \item \texttt{ansatz/}: Slater--Jastrow/backflow and adjoint heads;
+  \item \texttt{hamiltonian/}: local energy and convention-checked operators;
+  \item \texttt{sampler/}: Metropolis or Langevin sampling with diagnostics;
+  \item \texttt{estimators/}: energy, overlaps, matrix elements, correlators;
+  \item \texttt{benchmarks/}: harmonic oscillator and small-\(N\) checks;
+  \item \texttt{notes/}: derivations and convention checks.
+\end{itemize}
+
+\section{Open issues}
+
+\begin{itemize}
+  \item The phrase ``approximate exactly'' should be avoided in final claims.
+        Neural wavefunctions provide systematically improvable approximations,
+        not exact states, unless a solvable benchmark is being represented by
+        construction.
+  \item The finite-\(N\) ungauged adjoint Hilbert space and the large-\(N\)
+        Marchesini--Onofri description must not be conflated.
+  \item Computing \(G(\tau)\) from a finite number of learned states is reliable
+        only over a time window where omitted higher states are controlled.
+  \item For negative quartic coupling, finite-\(N\) tunneling makes the model
+        unstable.  The calculation must explicitly state when it is targeting
+        the intrinsically large-\(N\) metastable/critical problem.
+\end{itemize}
+
+\end{document}
