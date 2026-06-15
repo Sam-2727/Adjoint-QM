@@ -11,6 +11,7 @@ import torch
 from torch import nn
 
 from .ansatz import _inverse_softplus
+from .sampler import metropolis_sample
 
 
 def traceless_hyperplane_basis(
@@ -637,6 +638,8 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         chebyshev_degrees: Sequence[int] = (1, 3, 5, 7),
         scale_init: float = 3.0,
         learn_scale: bool = False,
+        coordinate_scale_init: float = 1.0,
+        learn_coordinate_scale: bool = False,
         hidden_layers: Sequence[int] = (32, 32),
         head_hidden_layers: Sequence[int] = (32,),
         action_correction_scale: float = 1.0,
@@ -657,6 +660,8 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             raise ValueError("quartic_tail_init must be non-negative")
         if scale_init <= 0:
             raise ValueError("scale_init must be positive")
+        if coordinate_scale_init <= 0:
+            raise ValueError("coordinate_scale_init must be positive")
         if action_correction_scale < 0:
             raise ValueError("action_correction_scale must be non-negative")
         if head_correction_scale < 0:
@@ -691,6 +696,13 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         self.raw_scale = nn.Parameter(
             raw_scale.clone().detach(),
             requires_grad=learn_scale,
+        )
+        raw_coordinate_scale = _inverse_softplus(
+            torch.as_tensor(coordinate_scale_init, dtype=dtype)
+        )
+        self.raw_coordinate_scale = nn.Parameter(
+            raw_coordinate_scale.clone().detach(),
+            requires_grad=learn_coordinate_scale,
         )
 
         feature_count = self.moment_cutoff - 1
@@ -743,9 +755,16 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
     def scale(self) -> torch.Tensor:
         return torch.nn.functional.softplus(self.raw_scale)
 
+    @property
+    def coordinate_scale(self) -> torch.Tensor:
+        return torch.nn.functional.softplus(self.raw_coordinate_scale)
+
+    def spectral_coordinates(self, lam: torch.Tensor) -> torch.Tensor:
+        return self.coordinate_scale * tangent_project(lam)
+
     def invariant_features(self, lam: torch.Tensor) -> torch.Tensor:
         return adjoint_even_moment_features(
-            lam,
+            self.spectral_coordinates(lam),
             moment_cutoff=self.moment_cutoff,
         )
 
@@ -754,7 +773,7 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
 
         if lam.ndim != 2 or lam.shape[-1] != self.n:
             raise ValueError(f"lam must have shape (batch, {self.n})")
-        centered = tangent_project(lam)
+        centered = self.spectral_coordinates(lam)
         p2 = torch.sum(centered**2, dim=-1)
         quartic_tail = torch.sum(
             (centered**2 + self.tail_eps**2) ** 1.5,
@@ -769,7 +788,7 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
 
     def head_basis(self, lam: torch.Tensor) -> torch.Tensor:
         return centered_chebyshev_heads(
-            lam,
+            self.spectral_coordinates(lam),
             degrees=self.chebyshev_degrees,
             scale=self.scale,
         )
@@ -819,7 +838,8 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             f"SU({self.n}), degrees=({degrees}), "
             f"alpha={float(self.alpha.detach()):.6g}, "
             f"cubic={float(self.cubic.detach()):.6g}, "
-            f"scale={float(self.scale.detach()):.6g}"
+            f"scale={float(self.scale.detach()):.6g}, "
+            f"coordinate_scale={float(self.coordinate_scale.detach()):.6g}"
         )
 
 
@@ -874,6 +894,27 @@ class AdjointTrainingRecord:
     local_energy_std: float
     alpha: float
     cubic: float = 0.0
+    coordinate_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class AdjointVMCTrainingRecord:
+    """Diagnostic record from one adjoint-sector Metropolis VMC step."""
+
+    step: int
+    surrogate_loss: float
+    energy: float
+    local_energy_std: float
+    local_energy_stderr: float
+    acceptance_rate: float
+    sample_count: int
+    radial: float
+    angular: float
+    potential: float
+    virial_residual: float
+    alpha: float
+    cubic: float = 0.0
+    coordinate_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -901,6 +942,28 @@ class AdjointObservables:
     parity_residual: float
     alpha: float
     cubic: float = 0.0
+    coordinate_scale: float = 1.0
+
+
+@dataclass(frozen=True)
+class AdjointMetropolisObservables:
+    """Unweighted diagnostics from samples drawn from the adjoint density."""
+
+    energy: float
+    radial: float
+    angular: float
+    potential: float
+    local_energy_std: float
+    local_energy_stderr: float
+    sample_count: int
+    tr_x2: float
+    tr_x4: float
+    kinetic: float
+    virial_rhs: float
+    virial_residual: float
+    alpha: float
+    cubic: float = 0.0
+    coordinate_scale: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -1021,6 +1084,13 @@ def _shifted_weighted_ratio(
     den = torch.sum(weights * denominator)
     norm = den * torch.exp(shift)
     return num / den, norm
+
+
+def _model_coordinate_scale_value(model: nn.Module) -> float:
+    coordinate_scale = getattr(model, "coordinate_scale", None)
+    if coordinate_scale is None:
+        return 1.0
+    return float(coordinate_scale.detach())
 
 
 def sobol_gaussian_traceless_samples(
@@ -1360,6 +1430,7 @@ def adjoint_quadrature_observables(
         parity_residual=float(parity.detach()),
         alpha=float(model.alpha.detach()),
         cubic=float(model.cubic.detach()),
+        coordinate_scale=_model_coordinate_scale_value(model),
     )
 
 
@@ -1433,6 +1504,7 @@ def adjoint_importance_observables(
         parity_residual=float(parity.detach()),
         alpha=float(model.alpha.detach()),
         cubic=float(model.cubic.detach()),
+        coordinate_scale=_model_coordinate_scale_value(model),
     )
 
 
@@ -1550,6 +1622,136 @@ def adjoint_importance_moments(
     )
 
 
+def adjoint_metropolis_observables(
+    model: SUNAdjointRadialSpectralAnsatz,
+    z: torch.Tensor,
+    *,
+    omega: float = 1.0,
+    coupling: float = 0.0,
+) -> AdjointMetropolisObservables:
+    """Return unweighted diagnostics for samples from the model density.
+
+    The input ``z`` contains orthonormal coordinates on the traceless
+    eigenvalue hyperplane.  It is assumed to be sampled from the current
+    density proportional to ``Delta(lambda)**2 * sum_i q_i(lambda)**2``.
+    """
+
+    if z.ndim != 2 or z.shape[-1] != model.n - 1:
+        raise ValueError(f"z must have shape (sample_count, {model.n - 1})")
+    if z.shape[0] < 2:
+        raise ValueError("at least two samples are required")
+
+    lam = eigenvalues_from_traceless_coordinates(z.detach(), n=model.n)
+    terms = adjoint_dirichlet_terms(
+        model,
+        lam,
+        omega=omega,
+        coupling=coupling,
+    )
+    with torch.no_grad():
+        kinetic_local = (terms.radial + terms.angular) / terms.head_norm
+        local_energy = kinetic_local + terms.potential
+        radial_local = terms.radial / terms.head_norm
+        angular_local = terms.angular / terms.head_norm
+        energy = torch.mean(local_energy)
+        local_std = torch.std(local_energy, unbiased=True)
+        local_stderr = local_std / sqrt(float(z.shape[0]))
+        tr_x2 = torch.sum(lam**2, dim=-1)
+        tr_x4 = torch.sum(lam**4, dim=-1)
+        mean_tr_x2 = torch.mean(tr_x2)
+        mean_tr_x4 = torch.mean(tr_x4)
+        kinetic = torch.mean(kinetic_local)
+        potential = torch.mean(terms.potential)
+        virial_rhs = omega**2 * mean_tr_x2 + 4.0 * coupling * mean_tr_x4
+        virial_residual = 2.0 * kinetic - virial_rhs
+
+    return AdjointMetropolisObservables(
+        energy=float(energy.detach()),
+        radial=float(torch.mean(radial_local).detach()),
+        angular=float(torch.mean(angular_local).detach()),
+        potential=float(potential.detach()),
+        local_energy_std=float(local_std.detach()),
+        local_energy_stderr=float(local_stderr.detach()),
+        sample_count=int(z.shape[0]),
+        tr_x2=float(mean_tr_x2.detach()),
+        tr_x4=float(mean_tr_x4.detach()),
+        kinetic=float(kinetic.detach()),
+        virial_rhs=float(virial_rhs.detach()),
+        virial_residual=float(virial_residual.detach()),
+        alpha=float(model.alpha.detach()),
+        cubic=float(model.cubic.detach()),
+        coordinate_scale=_model_coordinate_scale_value(model),
+    )
+
+
+def adjoint_vmc_dirichlet_loss(
+    model: SUNAdjointRadialSpectralAnsatz,
+    z: torch.Tensor,
+    *,
+    omega: float = 1.0,
+    coupling: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    r"""Return the adjoint Metropolis VMC Dirichlet-form loss.
+
+    The adjoint-sector probability density in eigenvalues is
+    ``rho_theta(lambda) proportional Delta(lambda)**2 sum_i q_i(lambda)**2``.
+    The energy is estimated from the first-derivative Dirichlet quotient,
+    so the pointwise quotient is not the Hamiltonian local energy and is not
+    constant even for an exact eigenstate.  Its gradient has two pieces:
+    the explicit derivative of the quotient and the score-function correction
+    from the parameter-dependent sampling density.  The scalar below has that
+    combined fixed-sample gradient:
+
+    ``mean(L_theta) + mean((L_theta - mean(L_theta)).detach()
+    * log rho_theta(lambda))``.
+
+    This scalar is not itself the physical energy; only its parameter gradient
+    is used for optimization.
+    """
+
+    if z.ndim != 2 or z.shape[-1] != model.n - 1:
+        raise ValueError(f"z must have shape (sample_count, {model.n - 1})")
+    if z.shape[0] < 2:
+        raise ValueError("at least two samples are required")
+
+    lam = eigenvalues_from_traceless_coordinates(z.detach(), n=model.n)
+    terms = adjoint_dirichlet_terms(
+        model,
+        lam,
+        omega=omega,
+        coupling=coupling,
+    )
+    local_energy = (
+        terms.potential + (terms.radial + terms.angular) / terms.head_norm
+    )
+    energy = torch.mean(local_energy)
+    centered_local_energy = local_energy.detach() - energy.detach()
+    log_density = model.log_density_eigenvalues(lam)
+    loss = energy + torch.mean(centered_local_energy * log_density)
+    return (
+        loss,
+        energy.detach(),
+        torch.std(local_energy.detach(), unbiased=True).detach(),
+    )
+
+
+def adjoint_vmc_score_function_loss(
+    model: SUNAdjointRadialSpectralAnsatz,
+    z: torch.Tensor,
+    *,
+    omega: float = 1.0,
+    coupling: float = 0.0,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Compatibility alias for :func:`adjoint_vmc_dirichlet_loss`."""
+
+    return adjoint_vmc_dirichlet_loss(
+        model,
+        z,
+        omega=omega,
+        coupling=coupling,
+    )
+
+
 def train_adjoint_quadrature(
     model: SUNAdjointRadialSpectralAnsatz,
     lam: torch.Tensor,
@@ -1602,6 +1804,7 @@ def train_adjoint_quadrature(
                     local_energy_std=obs.local_energy_std,
                     alpha=obs.alpha,
                     cubic=obs.cubic,
+                    coordinate_scale=obs.coordinate_scale,
                 )
             )
     return history
@@ -1659,8 +1862,102 @@ def train_adjoint_importance(
                     local_energy_std=obs.local_energy_std,
                     alpha=obs.alpha,
                     cubic=obs.cubic,
+                    coordinate_scale=obs.coordinate_scale,
                 )
             )
+    return history
+
+
+def train_adjoint_vmc_metropolis(
+    model: SUNAdjointRadialSpectralAnsatz,
+    *,
+    omega: float = 1.0,
+    coupling: float = 0.0,
+    n_steps: int = 100,
+    n_samples: int = 2048,
+    n_chains: int = 64,
+    step_size: float = 0.8,
+    burn_in: int = 300,
+    thinning: int = 5,
+    lr: float = 1.0e-3,
+    seed: int = 1234,
+    report_every: int = 10,
+    dtype: torch.dtype = torch.float64,
+    device: torch.device | str | None = None,
+) -> list[AdjointVMCTrainingRecord]:
+    """Train an adjoint wavefunction with resampled Metropolis VMC gradients."""
+
+    if n_steps < 1:
+        raise ValueError("n_steps must be positive")
+    if n_samples < 2:
+        raise ValueError("n_samples must be at least two")
+    if n_chains < 1:
+        raise ValueError("n_chains must be positive")
+    if step_size <= 0:
+        raise ValueError("step_size must be positive")
+    if burn_in < 0:
+        raise ValueError("burn_in must be non-negative")
+    if thinning < 1:
+        raise ValueError("thinning must be positive")
+    if lr <= 0:
+        raise ValueError("lr must be positive")
+    if report_every < 1:
+        raise ValueError("report_every must be positive")
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    history: list[AdjointVMCTrainingRecord] = []
+    model.train()
+    for step in range(1, n_steps + 1):
+        sample_result = metropolis_sample(
+            model,
+            n_samples=n_samples,
+            dim=model.n - 1,
+            n_chains=n_chains,
+            step_size=step_size,
+            burn_in=burn_in,
+            thinning=thinning,
+            seed=seed + step - 1,
+            dtype=dtype,
+            device=device,
+        )
+        loss, _, _ = adjoint_vmc_dirichlet_loss(
+            model,
+            sample_result.samples,
+            omega=omega,
+            coupling=coupling,
+        )
+        record: AdjointVMCTrainingRecord | None = None
+        if step == 1 or step % report_every == 0 or step == n_steps:
+            obs = adjoint_metropolis_observables(
+                model,
+                sample_result.samples,
+                omega=omega,
+                coupling=coupling,
+            )
+            record = AdjointVMCTrainingRecord(
+                step=step,
+                surrogate_loss=float(loss.detach()),
+                energy=obs.energy,
+                local_energy_std=obs.local_energy_std,
+                local_energy_stderr=obs.local_energy_stderr,
+                acceptance_rate=sample_result.acceptance_rate,
+                sample_count=obs.sample_count,
+                radial=obs.radial,
+                angular=obs.angular,
+                potential=obs.potential,
+                virial_residual=obs.virial_residual,
+                alpha=obs.alpha,
+                cubic=obs.cubic,
+                coordinate_scale=obs.coordinate_scale,
+            )
+
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+
+        if record is not None:
+            history.append(record)
+
     return history
 
 
