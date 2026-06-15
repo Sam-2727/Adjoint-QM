@@ -1,27 +1,43 @@
 from __future__ import annotations
 
+import math
+from pathlib import Path
+import sys
+
 import pytest
 
 torch = pytest.importorskip("torch")
+ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = ROOT / "scripts"
+if str(SCRIPTS) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS))
 
 from adjoint_qm import (  # noqa: E402
     SUNAdjointChebyshevSpectralAnsatz,
+    SUNAdjointLinearImpurityAnsatz,
     adjoint_eigenvalue_grid,
+    adjoint_shape_features,
+    adjoint_shape_quadratic_features,
+    adjoint_importance_energy,
     adjoint_metropolis_observables,
     adjoint_importance_moments,
     adjoint_importance_observables,
+    adjoint_quadrature_linear_impurity_eigenproblem,
     adjoint_quadrature_moments,
     adjoint_quadrature_observables,
     adjoint_structure_diagnostics,
     adjoint_vmc_dirichlet_loss,
     centered_chebyshev_heads,
     exact_suN_harmonic_adjoint_energy,
+    initialize_full_chebyshev_head_from_linear_impurity,
     metropolis_sample,
+    quartic_ray_wkb_tail,
     sobol_gaussian_traceless_samples,
     su3_adjoint_polar_eigenvalue_grid,
     train_adjoint_vmc_metropolis,
 )
 from adjoint_qm.ansatz import _inverse_softplus  # noqa: E402
+from run_sun_adjoint_vmc_benchmarks import linear_impurity_ladder_specs  # noqa: E402
 
 
 def shared_flexible_chebyshev_model(n: int) -> SUNAdjointChebyshevSpectralAnsatz:
@@ -59,6 +75,184 @@ def test_centered_chebyshev_heads_are_traceless_and_weyl_covariant() -> None:
 
     assert torch.max(torch.abs(torch.sum(heads, dim=-1))).item() < 1.0e-12
     assert torch.max(torch.abs(permuted_heads - heads[:, :, perm])).item() < 1.0e-12
+
+
+@pytest.mark.parametrize("n", [2, 3])
+def test_ray_wkb_tail_reduces_to_radial_tail_for_su2_su3(n: int) -> None:
+    torch.set_default_dtype(torch.float64)
+    lam = torch.tensor(
+        [
+            [1.1, -0.4, -0.7],
+            [0.8, 0.2, -1.0],
+            [-1.3, 0.5, 0.8],
+        ],
+        dtype=torch.float64,
+    )[:, :n]
+    lam = lam - torch.mean(lam, dim=-1, keepdim=True)
+    p2 = torch.sum(lam**2, dim=-1)
+    tail = quartic_ray_wkb_tail(lam, eps=0.0)
+    expected = p2**1.5 / math.sqrt(2.0)
+
+    assert torch.max(torch.abs(tail - expected)).item() < 1.0e-12
+
+
+def test_shape_features_are_even_and_weyl_invariant() -> None:
+    torch.set_default_dtype(torch.float64)
+    lam = torch.tensor(
+        [
+            [1.2, -0.3, -0.4, -0.5],
+            [0.9, 0.2, -0.7, -0.4],
+        ],
+        dtype=torch.float64,
+    )
+    perm = [2, 0, 3, 1]
+    features = adjoint_shape_features(lam, feature_scale=1.7)
+
+    assert features.shape == (2, 3)
+    assert (
+        torch.max(torch.abs(features - adjoint_shape_features(-lam, feature_scale=1.7))).item()
+        < 1.0e-12
+    )
+    assert (
+        torch.max(
+            torch.abs(features - adjoint_shape_features(lam[:, perm], feature_scale=1.7))
+        ).item()
+        < 1.0e-12
+    )
+
+
+def test_linear_impurity_ladder_specs_are_nested() -> None:
+    for parity in ("odd", "even"):
+        specs = linear_impurity_ladder_specs(parity)
+        names = [spec["name"] for spec in specs]
+        expected_degree_parity = 1 if parity == "odd" else 0
+
+        assert len(names) == len(set(names))
+        previous_basis: set[tuple[str, int]] = set()
+        for spec in specs:
+            basis = {
+                (term, degree)
+                for term in spec["terms"]
+                for degree in spec["chebyshev_degrees"]
+            }
+            assert all(degree % 2 == expected_degree_parity for _, degree in basis)
+            assert previous_basis <= basis
+            assert len(basis) > 0
+            previous_basis = basis
+
+
+def test_even_chebyshev_ansatz_structure_diagnostics_use_even_parity() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(2, 4),
+        parity="even",
+        scale_init=2.5,
+        dtype=torch.float64,
+    )
+    lam = torch.tensor(
+        [
+            [1.1, -0.2, -0.4, -0.5],
+            [0.7, 0.3, -0.8, -0.2],
+        ],
+        dtype=torch.float64,
+    )
+
+    diagnostics = adjoint_structure_diagnostics(model, lam)
+
+    assert diagnostics.traceless_residual < 1.0e-12
+    assert diagnostics.parity_residual < 1.0e-12
+    assert diagnostics.weyl_residual < 1.0e-12
+
+
+def test_shape_quadratic_features_match_ladder_terms() -> None:
+    torch.set_default_dtype(torch.float64)
+    lam = torch.tensor(
+        [
+            [0.9, -0.2, -0.4, -0.3],
+            [-0.8, 0.6, 0.3, -0.1],
+        ],
+        dtype=torch.float64,
+    )
+
+    shape = adjoint_shape_features(lam, feature_scale=1.3)
+    quadratic = adjoint_shape_quadratic_features(lam, feature_scale=1.3)
+
+    rho = shape[:, 0]
+    u = shape[:, 1]
+    v = shape[:, 2]
+    assert torch.max(torch.abs(quadratic[:, 0] - rho)).item() < 1.0e-12
+    assert torch.max(torch.abs(quadratic[:, 1] - u)).item() < 1.0e-12
+    assert torch.max(torch.abs(quadratic[:, 2] - v)).item() < 1.0e-12
+    assert torch.max(torch.abs(quadratic[:, 3] - rho * rho)).item() < 1.0e-12
+    assert torch.max(torch.abs(quadratic[:, 4] - rho * u)).item() < 1.0e-12
+    assert torch.max(torch.abs(quadratic[:, 5] - rho * v)).item() < 1.0e-12
+
+
+def test_full_chebyshev_head_mode_can_change_leading_coefficient() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1, 3),
+        head_coefficient_mode="full",
+        head_correction_scale=0.5,
+        scale_init=2.5,
+        dtype=torch.float64,
+    )
+    assert model.head_net is not None
+    final = model.head_net[-1]
+    assert isinstance(final, torch.nn.Linear)
+    with torch.no_grad():
+        final.weight.zero_()
+        final.bias.copy_(torch.tensor([0.4, -0.2], dtype=torch.float64))
+    lam = torch.tensor(
+        [
+            [0.9, -0.2, -0.4, -0.3],
+            [-0.8, 0.6, 0.3, -0.1],
+        ],
+        dtype=torch.float64,
+    )
+
+    coeffs = model.head_coefficients(lam)
+    basis = model.head_basis(lam)
+    expected = 1.2 * basis[:, 0, :] - 0.1 * basis[:, 1, :]
+
+    assert torch.max(torch.abs(coeffs[:, 0] - 1.2)).item() < 1.0e-12
+    assert torch.max(torch.abs(coeffs[:, 1] + 0.1)).item() < 1.0e-12
+    assert torch.max(torch.abs(model.head(lam) - expected)).item() < 1.0e-12
+
+
+def test_anchored_chebyshev_head_mode_keeps_leading_coefficient_fixed() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1, 3),
+        head_coefficient_mode="anchored",
+        head_correction_scale=0.5,
+        scale_init=2.5,
+        dtype=torch.float64,
+    )
+    assert model.head_net is not None
+    final = model.head_net[-1]
+    assert isinstance(final, torch.nn.Linear)
+    with torch.no_grad():
+        final.weight.zero_()
+        final.bias.fill_(0.4)
+    lam = torch.tensor([[0.9, -0.2, -0.4, -0.3]], dtype=torch.float64)
+
+    coeffs = model.head_coefficients(lam)
+
+    assert coeffs[0, 0].item() == pytest.approx(1.0, abs=1.0e-12)
+    assert coeffs[0, 1].item() == pytest.approx(0.2, abs=1.0e-12)
 
 
 @pytest.mark.parametrize("n", [2, 3, 4])
@@ -122,6 +316,8 @@ def test_chebyshev_ansatz_structure_and_generic_collision_identity() -> None:
         hidden_layers=(8,),
         head_hidden_layers=(8,),
         chebyshev_degrees=(1, 3),
+        feature_mode="shape",
+        feature_scale_init=1.5,
         scale_init=2.5,
         action_correction_scale=0.05,
         head_correction_scale=0.05,
@@ -143,6 +339,164 @@ def test_chebyshev_ansatz_structure_and_generic_collision_identity() -> None:
     assert diagnostics.weyl_residual < 1.0e-12
     assert diagnostics.head_collision_ratio_max_abs < 10.0
     assert diagnostics.profile_collision_identity_residual < 1.0e-9
+
+
+def test_linear_impurity_eigenproblem_reproduces_harmonic_adjoint_t1() -> None:
+    torch.set_default_dtype(torch.float64)
+    _, lam, weights = adjoint_eigenvalue_grid(
+        4,
+        6.0,
+        26,
+        dtype=torch.float64,
+    )
+    envelope = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1,),
+        scale_init=3.0,
+        dtype=torch.float64,
+    )
+
+    result = adjoint_quadrature_linear_impurity_eigenproblem(
+        envelope,
+        lam,
+        weights,
+        coupling=0.0,
+        chebyshev_degrees=(1,),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=1.0,
+        terms=("1",),
+        tail_eps=envelope.tail_eps,
+    )
+    linear_model = SUNAdjointLinearImpurityAnsatz(
+        envelope_model=envelope,
+        coefficients=result.coefficients,
+        chebyshev_degrees=(1,),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=1.0,
+        terms=("1",),
+        tail_eps=envelope.tail_eps,
+    )
+    obs = adjoint_quadrature_observables(linear_model, lam, weights, coupling=0.0)
+
+    assert result.retained_basis_count == 1
+    assert result.energy == pytest.approx(
+        exact_suN_harmonic_adjoint_energy(4, 1.0),
+        abs=5.0e-5,
+    )
+    assert obs.energy == pytest.approx(result.energy, abs=1.0e-10)
+
+
+def test_linear_impurity_basis_preserves_structure_and_lowers_fixed_envelope() -> None:
+    torch.set_default_dtype(torch.float64)
+    _, lam, weights = adjoint_eigenvalue_grid(
+        4,
+        4.5,
+        10,
+        dtype=torch.float64,
+    )
+    envelope = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        quartic_tail_init=2.0 * math.sqrt(2.0) / 3.0,
+        feature_mode="shape",
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1,),
+        scale_init=3.0,
+        dtype=torch.float64,
+    )
+    baseline = adjoint_quadrature_observables(envelope, lam, weights, coupling=1.0)
+    result = adjoint_quadrature_linear_impurity_eigenproblem(
+        envelope,
+        lam,
+        weights,
+        coupling=1.0,
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=1.0,
+        terms=("1", "rho", "u", "v"),
+        tail_eps=envelope.tail_eps,
+    )
+    linear_model = SUNAdjointLinearImpurityAnsatz(
+        envelope_model=envelope,
+        coefficients=result.coefficients,
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=1.0,
+        terms=("1", "rho", "u", "v"),
+        tail_eps=envelope.tail_eps,
+    )
+    obs = adjoint_quadrature_observables(linear_model, lam, weights, coupling=1.0)
+    diagnostics = adjoint_structure_diagnostics(linear_model, lam[:4])
+
+    assert result.retained_basis_count >= 2
+    assert result.energy <= baseline.energy + 1.0e-10
+    assert obs.energy == pytest.approx(result.energy, abs=1.0e-9)
+    assert diagnostics.traceless_residual < 1.0e-12
+    assert diagnostics.parity_residual < 1.0e-12
+    assert diagnostics.weyl_residual < 1.0e-12
+
+
+def test_full_neural_head_initializes_exactly_from_linear_impurity() -> None:
+    torch.set_default_dtype(torch.float64)
+    _, lam, weights = adjoint_eigenvalue_grid(
+        4,
+        4.5,
+        10,
+        dtype=torch.float64,
+    )
+    neural = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        quartic_tail_init=2.0 * math.sqrt(2.0) / 3.0,
+        feature_mode="shape_quadratic",
+        hidden_layers=(),
+        head_hidden_layers=(),
+        head_coefficient_mode="full",
+        chebyshev_degrees=(1, 3),
+        scale_init=3.0,
+        dtype=torch.float64,
+    )
+    terms = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v")
+    result = adjoint_quadrature_linear_impurity_eigenproblem(
+        neural,
+        lam,
+        weights,
+        coupling=1.0,
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=neural.scale.detach(),
+        feature_scale=neural.feature_scale.detach(),
+        terms=terms,
+        tail_eps=neural.tail_eps,
+    )
+    linear = SUNAdjointLinearImpurityAnsatz(
+        envelope_model=neural,
+        coefficients=result.coefficients,
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=neural.scale.detach(),
+        feature_scale=neural.feature_scale.detach(),
+        terms=terms,
+        tail_eps=neural.tail_eps,
+    )
+
+    divisor = initialize_full_chebyshev_head_from_linear_impurity(
+        neural,
+        result.coefficients,
+        terms=terms,
+        chebyshev_degrees=(1, 3),
+    )
+    probe = lam[:12]
+    linear_head = linear.head(probe)
+    neural_head = neural.head(probe)
+    linear_obs = adjoint_quadrature_observables(linear, lam, weights, coupling=1.0)
+    neural_obs = adjoint_quadrature_observables(neural, lam, weights, coupling=1.0)
+
+    assert abs(divisor) > 1.0e-12
+    assert torch.max(torch.abs(divisor * neural_head - linear_head)).item() < 1.0e-10
+    assert neural_obs.energy == pytest.approx(linear_obs.energy, abs=1.0e-10)
 
 
 def test_coordinate_scale_derivative_matches_virial_residual() -> None:
@@ -188,6 +542,69 @@ def test_coordinate_scale_derivative_matches_virial_residual() -> None:
     moments = adjoint_quadrature_moments(model, lam, weights, coupling=0.0)
 
     assert finite_difference == pytest.approx(moments.virial_residual, abs=1.0e-7)
+
+
+def test_su4_importance_coordinate_scale_autograd_matches_quartic_virial_residual() -> None:
+    torch.set_default_dtype(torch.float64)
+    samples = sobol_gaussian_traceless_samples(
+        4,
+        131072,
+        sigma=1.0,
+        seed=993,
+        dtype=torch.float64,
+    )
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        quartic_tail_init=2.0 * math.sqrt(2.0) / 3.0,
+        moment_cutoff=6,
+        feature_mode="shape",
+        feature_scale_init=1.3,
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1,),
+        scale_init=3.0,
+        coordinate_scale_init=1.04,
+        learn_coordinate_scale=True,
+        action_correction_scale=0.0,
+        head_correction_scale=0.0,
+        dtype=torch.float64,
+    )
+
+    obs = adjoint_importance_observables(
+        model,
+        samples.lam,
+        samples.log_prob,
+        coupling=1.0,
+    )
+    energy_tensor, *_ = adjoint_importance_energy(
+        model,
+        samples.lam,
+        samples.log_prob,
+        coupling=1.0,
+    )
+    (grad_raw_scale,) = torch.autograd.grad(
+        energy_tensor,
+        model.raw_coordinate_scale,
+    )
+    grad_log_scale = (
+        grad_raw_scale
+        * model.coordinate_scale.detach()
+        / torch.sigmoid(model.raw_coordinate_scale.detach())
+    )
+    moments = adjoint_importance_moments(
+        model,
+        samples.lam,
+        samples.log_prob,
+        coupling=1.0,
+    )
+
+    assert math.isfinite(obs.energy)
+    assert grad_log_scale.item() == pytest.approx(
+        moments.virial_residual,
+        abs=1.0e-2,
+        rel=2.0e-3,
+    )
 
 
 @pytest.mark.parametrize("n", [2, 3, 4])

@@ -20,14 +20,18 @@ import torch
 
 from adjoint_qm import (
     SUNAdjointChebyshevSpectralAnsatz,
+    SUNAdjointLinearImpurityAnsatz,
     adjoint_eigenvalue_grid,
+    adjoint_importance_energy,
     adjoint_importance_moments,
     adjoint_importance_observables,
     adjoint_quadrature_energy,
+    adjoint_quadrature_linear_impurity_eigenproblem,
     adjoint_quadrature_moments,
     adjoint_quadrature_observables,
     adjoint_structure_diagnostics,
     exact_suN_harmonic_adjoint_energy,
+    initialize_full_chebyshev_head_from_linear_impurity,
     log_vandermonde_abs,
     sobol_gaussian_traceless_samples,
     su3_adjoint_polar_eigenvalue_grid,
@@ -60,17 +64,54 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--lr", type=float, default=1.0e-3)
     parser.add_argument("--report-every", type=int, default=50)
     parser.add_argument("--envelope-lbfgs-max-iter", type=int, default=80)
+    parser.add_argument("--include-linear-impurity-candidate", action="store_true")
+    parser.add_argument("--include-linear-impurity-ladder", action="store_true")
+    parser.add_argument(
+        "--include-linear-initialized-neural-candidate",
+        action="store_true",
+    )
+    parser.add_argument(
+        "--linear-impurity-terms",
+        nargs="+",
+        default=["1", "rho", "u", "v", "rho2", "rho_u", "rho_v"],
+    )
+    parser.add_argument("--linear-impurity-overlap-rtol", type=float, default=1.0e-10)
+    parser.add_argument("--linear-initialized-neural-steps", type=int, default=40)
+    parser.add_argument("--linear-initialized-neural-lr", type=float, default=2.0e-4)
+    parser.add_argument("--include-multicloud-candidate", action="store_true")
+    parser.add_argument("--multicloud-steps", type=int, default=120)
+    parser.add_argument("--multicloud-clouds-per-step", type=int, default=2)
+    parser.add_argument("--multicloud-lr", type=float, default=5.0e-4)
+    parser.add_argument(
+        "--feature-mode",
+        choices=["raw_moments", "shape", "shape_quadratic"],
+        default="shape",
+    )
+    parser.add_argument("--feature-scale-init", type=float, default=1.0)
+    parser.add_argument("--learn-feature-scale", action="store_true")
+    parser.add_argument("--parity", choices=["odd", "even"], default="odd")
+    parser.add_argument("--chebyshev-degrees", type=int, nargs="+", default=None)
     parser.add_argument("--learn-coordinate-scale", action="store_true")
     parser.add_argument("--action-correction-scale", type=float, default=0.25)
     parser.add_argument("--head-correction-scale", type=float, default=0.25)
+    parser.add_argument(
+        "--head-coefficient-mode",
+        choices=["full", "anchored"],
+        default="full",
+        help=(
+            "Use 'full' for the note's c_k(m) Chebyshev coefficient network, "
+            "or 'anchored' to keep the leading head coefficient fixed."
+        ),
+    )
     parser.add_argument("--energy-abs-tol", type=float, default=5.0e-4)
+    parser.add_argument("--energy-spread-abs-tol", type=float, default=2.0e-3)
     parser.add_argument("--virial-abs-tol", type=float, default=5.0e-3)
     parser.add_argument("--min-ess-fraction", type=float, default=0.05)
     return parser.parse_args()
 
 
 def quartic_tail_initialization(coupling: float) -> float:
-    """Coordinate-WKB coefficient for ``S ~ c sum_i |lambda_i|**3``."""
+    """Ray-WKB coefficient for ``S ~ c sqrt(p2) sqrt(p4)``."""
 
     return 2.0 * math.sqrt(2.0 * coupling) / 3.0
 
@@ -78,19 +119,27 @@ def quartic_tail_initialization(coupling: float) -> float:
 def shared_ansatz_config(args: argparse.Namespace) -> dict[str, Any]:
     """Return the identical flexible ansatz settings used for every N."""
 
+    chebyshev_degrees = args.chebyshev_degrees
+    if chebyshev_degrees is None:
+        chebyshev_degrees = [1, 3] if args.parity == "odd" else [2, 4]
     return {
         "omega_init": args.omega,
         "quartic_tail_init": quartic_tail_initialization(args.coupling),
         "moment_cutoff": 6,
+        "feature_mode": args.feature_mode,
+        "feature_scale_init": args.feature_scale_init,
+        "learn_feature_scale": args.learn_feature_scale,
         "hidden_layers": [24, 24],
         "head_hidden_layers": [24],
-        "chebyshev_degrees": [1, 3, 5],
+        "chebyshev_degrees": chebyshev_degrees,
+        "parity": args.parity,
         "scale_init": 3.0,
         "learn_scale": False,
         "coordinate_scale_init": 1.0,
         "learn_coordinate_scale": args.learn_coordinate_scale,
         "action_correction_scale": args.action_correction_scale,
         "head_correction_scale": args.head_correction_scale,
+        "head_coefficient_mode": args.head_coefficient_mode,
     }
 
 
@@ -104,15 +153,53 @@ def make_shared_model(
         omega_init=config["omega_init"],
         quartic_tail_init=config["quartic_tail_init"],
         moment_cutoff=config["moment_cutoff"],
+        feature_mode=config["feature_mode"],
+        feature_scale_init=config["feature_scale_init"],
+        learn_feature_scale=config["learn_feature_scale"],
         hidden_layers=tuple(config["hidden_layers"]),
         head_hidden_layers=tuple(config["head_hidden_layers"]),
         chebyshev_degrees=tuple(config["chebyshev_degrees"]),
+        parity=config["parity"],
         scale_init=config["scale_init"],
         learn_scale=config["learn_scale"],
         coordinate_scale_init=config["coordinate_scale_init"],
         learn_coordinate_scale=config["learn_coordinate_scale"],
         action_correction_scale=config["action_correction_scale"],
         head_correction_scale=config["head_correction_scale"],
+        head_coefficient_mode=config["head_coefficient_mode"],
+        dtype=torch.float64,
+    )
+
+
+def make_linear_initialized_neural_model(
+    n: int,
+    args: argparse.Namespace,
+) -> SUNAdjointChebyshevSpectralAnsatz:
+    """Return the neural ansatz shape needed to contain the linear impurity."""
+
+    config = shared_ansatz_config(args)
+    config["feature_mode"] = "shape_quadratic"
+    config["head_hidden_layers"] = []
+    config["head_coefficient_mode"] = "full"
+    return SUNAdjointChebyshevSpectralAnsatz(
+        n=n,
+        omega_init=config["omega_init"],
+        quartic_tail_init=config["quartic_tail_init"],
+        moment_cutoff=config["moment_cutoff"],
+        feature_mode=config["feature_mode"],
+        feature_scale_init=config["feature_scale_init"],
+        learn_feature_scale=config["learn_feature_scale"],
+        hidden_layers=tuple(config["hidden_layers"]),
+        head_hidden_layers=tuple(config["head_hidden_layers"]),
+        chebyshev_degrees=tuple(config["chebyshev_degrees"]),
+        parity=config["parity"],
+        scale_init=config["scale_init"],
+        learn_scale=config["learn_scale"],
+        coordinate_scale_init=config["coordinate_scale_init"],
+        learn_coordinate_scale=config["learn_coordinate_scale"],
+        action_correction_scale=config["action_correction_scale"],
+        head_correction_scale=config["head_correction_scale"],
+        head_coefficient_mode=config["head_coefficient_mode"],
         dtype=torch.float64,
     )
 
@@ -235,7 +322,9 @@ def structure_payload(model: SUNAdjointChebyshevSpectralAnsatz) -> dict[str, flo
     samples = samples - torch.mean(samples, dim=-1, keepdim=True)
     diagnostics = adjoint_structure_diagnostics(model, samples)
     return {
+        "parity": getattr(model, "parity", "odd"),
         "traceless_residual": diagnostics.traceless_residual,
+        "parity_residual": diagnostics.parity_residual,
         "odd_parity_residual": diagnostics.parity_residual,
         "weyl_covariance_residual": diagnostics.weyl_residual,
         "head_collision_ratio_max_abs": diagnostics.head_collision_ratio_max_abs,
@@ -341,9 +430,11 @@ def candidate_passes(
         return False
     if not (
         structure["traceless_residual"] < 1.0e-10
-        and structure["odd_parity_residual"] < 1.0e-10
+        and structure["parity_residual"] < 1.0e-10
         and structure["weyl_covariance_residual"] < 1.0e-10
     ):
+        return False
+    if combined["energy_spread_independent_runs"] >= args.energy_spread_abs_tol:
         return False
     if combined["virial_residual_abs_max"] >= args.virial_abs_tol:
         return False
@@ -435,20 +526,21 @@ def train_importance_adam_candidate(
     )
 
 
-def train_envelope_quadrature_candidate(
+def fit_envelope_lbfgs(
+    model: SUNAdjointChebyshevSpectralAnsatz,
     n: int,
     args: argparse.Namespace,
-    *,
-    benchmark: float | None,
-) -> dict[str, Any]:
-    """Train the stable envelope subspace inside the shared flexible model."""
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Optimize only the scalar envelope parameters of a shared model."""
 
-    model = make_shared_model(n, args)
+    trainable_names = {"raw_alpha", "raw_cubic"}
+    if args.learn_coordinate_scale:
+        trainable_names.add("raw_coordinate_scale")
     for parameter_name, parameter in model.named_parameters():
-        parameter.requires_grad_(parameter_name in {"raw_alpha", "raw_cubic"})
+        parameter.requires_grad_(parameter_name in trainable_names)
     lam, weights, grid_metadata = envelope_training_grid(n)
     optimizer = torch.optim.LBFGS(
-        [model.raw_alpha, model.raw_cubic],
+        [parameter for parameter in model.parameters() if parameter.requires_grad],
         lr=0.4,
         max_iter=args.envelope_lbfgs_max_iter,
         tolerance_grad=1.0e-12,
@@ -501,16 +593,545 @@ def train_envelope_quadrature_candidate(
             "coordinate_scale": obs.coordinate_scale,
         }
     ]
+    payload = {
+        "grid": grid_metadata,
+        "wall_time_seconds": wall_time,
+    }
+    return payload, history
+
+
+def train_envelope_quadrature_candidate(
+    n: int,
+    args: argparse.Namespace,
+    *,
+    benchmark: float | None,
+) -> dict[str, Any]:
+    """Train the stable envelope subspace inside the shared flexible model."""
+
+    model = make_shared_model(n, args)
+    envelope_payload, history = fit_envelope_lbfgs(model, n, args)
     training_payload = {
         "method": (
             "deterministic LBFGS warm start of the alpha/cubic envelope "
             "inside the full shared Chebyshev ansatz"
         ),
-        "grid": grid_metadata,
-        "wall_time_seconds": wall_time,
+        **envelope_payload,
     }
     return summarize_candidate(
         "envelope_quadrature_lbfgs",
+        model,
+        args,
+        benchmark=benchmark,
+        training_payload=training_payload,
+        history=history,
+    )
+
+
+def set_full_trainability(
+    model: SUNAdjointChebyshevSpectralAnsatz,
+    args: argparse.Namespace,
+) -> None:
+    """Restore trainability for the flexible parameters enabled by CLI flags."""
+
+    for parameter_name, parameter in model.named_parameters():
+        if parameter_name == "raw_scale":
+            parameter.requires_grad_(False)
+        elif parameter_name == "raw_feature_scale":
+            parameter.requires_grad_(args.learn_feature_scale)
+        elif parameter_name == "raw_coordinate_scale":
+            parameter.requires_grad_(args.learn_coordinate_scale)
+        else:
+            parameter.requires_grad_(True)
+
+
+def train_multicloud_candidate(
+    n: int,
+    args: argparse.Namespace,
+    *,
+    benchmark: float | None,
+) -> dict[str, Any]:
+    """Train flexible corrections after envelope warm start on refreshed clouds."""
+
+    model = make_shared_model(n, args)
+    envelope_payload, _ = fit_envelope_lbfgs(model, n, args)
+    set_full_trainability(model, args)
+    trainable_parameters = [
+        parameter for parameter in model.parameters() if parameter.requires_grad
+    ]
+    optimizer = torch.optim.Adam(trainable_parameters, lr=args.multicloud_lr)
+    history: list[dict[str, Any]] = []
+    start = time.perf_counter()
+
+    for step in range(1, args.multicloud_steps + 1):
+        optimizer.zero_grad(set_to_none=True)
+        losses = []
+        for cloud in range(args.multicloud_clouds_per_step):
+            samples = sobol_gaussian_traceless_samples(
+                n,
+                args.n_samples,
+                sigma=args.proposal_sigma,
+                seed=args.seed + 1_000_000 * n + 10_000 * step + cloud,
+                dtype=torch.float64,
+            )
+            energy, *_ = adjoint_importance_energy(
+                model,
+                samples.lam,
+                samples.log_prob,
+                omega=args.omega,
+                coupling=args.coupling,
+            )
+            losses.append(energy)
+        loss = torch.stack(losses).mean()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(trainable_parameters, 10.0)
+        optimizer.step()
+
+        if (
+            step == 1
+            or step % args.report_every == 0
+            or step == args.multicloud_steps
+        ):
+            eval_samples = sobol_gaussian_traceless_samples(
+                n,
+                args.n_samples,
+                sigma=args.proposal_sigma,
+                seed=args.seed + 2_000_000 * n + step,
+                dtype=torch.float64,
+            )
+            obs = adjoint_importance_observables(
+                model,
+                eval_samples.lam,
+                eval_samples.log_prob,
+                omega=args.omega,
+                coupling=args.coupling,
+            )
+            moments = adjoint_importance_moments(
+                model,
+                eval_samples.lam,
+                eval_samples.log_prob,
+                omega=args.omega,
+                coupling=args.coupling,
+            )
+            history.append(
+                {
+                    "step": step,
+                    "energy": obs.energy,
+                    "radial": obs.radial,
+                    "angular": obs.angular,
+                    "potential": obs.potential,
+                    "local_energy_std": obs.local_energy_std,
+                    "virial_residual": moments.virial_residual,
+                    "alpha": obs.alpha,
+                    "cubic": obs.cubic,
+                    "coordinate_scale": obs.coordinate_scale,
+                }
+            )
+
+    wall_time = time.perf_counter() - start
+    training_payload = {
+        "method": (
+            "envelope LBFGS warm start followed by flexible Adam on refreshed "
+            "independent Sobol-Gaussian clouds"
+        ),
+        "warm_start": envelope_payload,
+        "n_steps": args.multicloud_steps,
+        "sample_count_per_cloud": args.n_samples,
+        "clouds_per_step": args.multicloud_clouds_per_step,
+        "proposal_sigma": args.proposal_sigma,
+        "lr": args.multicloud_lr,
+        "wall_time_seconds": wall_time + envelope_payload["wall_time_seconds"],
+    }
+    return summarize_candidate(
+        "multicloud_flexible_after_envelope",
+        model,
+        args,
+        benchmark=benchmark,
+        training_payload=training_payload,
+        history=history,
+    )
+
+
+def linear_impurity_ladder_specs(parity: str = "odd") -> list[dict[str, Any]]:
+    """Return nested default bases for linear-impurity convergence checks."""
+
+    if parity == "odd":
+        low_degree = 1
+        high_degree = 3
+    elif parity == "even":
+        low_degree = 2
+        high_degree = 4
+    else:
+        raise ValueError("parity must be 'odd' or 'even'")
+    return [
+        {
+            "name": f"linear_ladder_{parity}_constant_t{low_degree}",
+            "terms": ("1",),
+            "chebyshev_degrees": (low_degree,),
+        },
+        {
+            "name": f"linear_ladder_{parity}_shape_t{low_degree}",
+            "terms": ("1", "rho", "u", "v"),
+            "chebyshev_degrees": (low_degree,),
+        },
+        {
+            "name": f"linear_ladder_{parity}_shape_t{low_degree}{high_degree}",
+            "terms": ("1", "rho", "u", "v"),
+            "chebyshev_degrees": (low_degree, high_degree),
+        },
+        {
+            "name": (
+                f"linear_ladder_{parity}_shape_quadratic_t"
+                f"{low_degree}{high_degree}"
+            ),
+            "terms": ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v"),
+            "chebyshev_degrees": (low_degree, high_degree),
+        },
+    ]
+
+
+def make_linear_impurity_candidate(
+    name: str,
+    model: SUNAdjointChebyshevSpectralAnsatz,
+    lam: torch.Tensor,
+    weights: torch.Tensor,
+    grid_metadata: dict[str, Any],
+    envelope_payload: dict[str, Any],
+    envelope_history: list[dict[str, Any]],
+    args: argparse.Namespace,
+    *,
+    benchmark: float | None,
+    terms: tuple[str, ...],
+    chebyshev_degrees: tuple[int, ...],
+) -> dict[str, Any]:
+    """Solve and summarize one fixed-envelope linear impurity basis."""
+
+    linear_start = time.perf_counter()
+    result = adjoint_quadrature_linear_impurity_eigenproblem(
+        model,
+        lam,
+        weights,
+        omega=args.omega,
+        coupling=args.coupling,
+        chebyshev_degrees=chebyshev_degrees,
+        chebyshev_scale=model.scale.detach(),
+        feature_scale=model.feature_scale.detach(),
+        terms=terms,
+        tail_eps=model.tail_eps,
+        overlap_rtol=args.linear_impurity_overlap_rtol,
+    )
+    linear_wall_time = time.perf_counter() - linear_start
+    linear_model = SUNAdjointLinearImpurityAnsatz(
+        envelope_model=model,
+        coefficients=result.coefficients,
+        chebyshev_degrees=chebyshev_degrees,
+        parity=args.parity,
+        chebyshev_scale=model.scale.detach(),
+        feature_scale=model.feature_scale.detach(),
+        terms=terms,
+        tail_eps=model.tail_eps,
+    )
+    obs = adjoint_quadrature_observables(
+        linear_model,
+        lam,
+        weights,
+        omega=args.omega,
+        coupling=args.coupling,
+    )
+    moments = adjoint_quadrature_moments(
+        linear_model,
+        lam,
+        weights,
+        omega=args.omega,
+        coupling=args.coupling,
+    )
+    history = envelope_history + [
+        {
+            "step": args.envelope_lbfgs_max_iter + 1,
+            "energy": obs.energy,
+            "radial": obs.radial,
+            "angular": obs.angular,
+            "potential": obs.potential,
+            "local_energy_std": obs.local_energy_std,
+            "virial_residual": moments.virial_residual,
+            "alpha": obs.alpha,
+            "cubic": obs.cubic,
+            "coordinate_scale": obs.coordinate_scale,
+            "linear_impurity_energy": result.energy,
+        }
+    ]
+    coefficient_payload = [
+        {
+            "basis": label,
+            "coefficient": float(coefficient),
+        }
+        for label, coefficient in zip(result.basis_labels, result.coefficients)
+    ]
+    training_payload = {
+        "method": (
+            "envelope LBFGS warm start followed by a linear impurity "
+            "generalized eigenproblem"
+        ),
+        "warm_start": envelope_payload,
+        "grid": grid_metadata,
+        "linear_impurity_energy": result.energy,
+        "retained_basis_count": result.retained_basis_count,
+        "requested_basis_count": len(terms) * len(chebyshev_degrees),
+        "basis_labels": list(result.basis_labels),
+        "coefficients": coefficient_payload,
+        "lowest_eigenvalues": [
+            float(value)
+            for value in result.eigenvalues[: min(6, result.eigenvalues.numel())]
+        ],
+        "overlap_eigenvalue_min": float(torch.min(result.overlap_eigenvalues)),
+        "overlap_eigenvalue_max": float(torch.max(result.overlap_eigenvalues)),
+        "overlap_rtol": args.linear_impurity_overlap_rtol,
+        "linear_solve_wall_time_seconds": linear_wall_time,
+        "wall_time_seconds": envelope_payload["wall_time_seconds"] + linear_wall_time,
+    }
+    return summarize_candidate(
+        name,
+        linear_model,
+        args,
+        benchmark=benchmark,
+        training_payload=training_payload,
+        history=history,
+    )
+
+
+def train_linear_impurity_candidate(
+    n: int,
+    args: argparse.Namespace,
+    *,
+    benchmark: float | None,
+) -> dict[str, Any]:
+    """Solve the configured fixed-envelope linear impurity basis."""
+
+    model = make_shared_model(n, args)
+    envelope_payload, envelope_history = fit_envelope_lbfgs(model, n, args)
+    lam, weights, grid_metadata = envelope_training_grid(n)
+    return make_linear_impurity_candidate(
+        "linear_impurity_after_envelope",
+        model,
+        lam,
+        weights,
+        grid_metadata,
+        envelope_payload,
+        envelope_history,
+        args,
+        benchmark=benchmark,
+        terms=tuple(args.linear_impurity_terms),
+        chebyshev_degrees=tuple(args.chebyshev_degrees),
+    )
+
+
+def train_linear_impurity_ladder_candidates(
+    n: int,
+    args: argparse.Namespace,
+    *,
+    benchmark: float | None,
+) -> list[dict[str, Any]]:
+    """Run a nested linear impurity basis ladder from one envelope warm start."""
+
+    model = make_shared_model(n, args)
+    envelope_payload, envelope_history = fit_envelope_lbfgs(model, n, args)
+    lam, weights, grid_metadata = envelope_training_grid(n)
+    candidates: list[dict[str, Any]] = []
+    previous_grid_energy: float | None = None
+    for spec in linear_impurity_ladder_specs(args.parity):
+        candidate = make_linear_impurity_candidate(
+            spec["name"],
+            model,
+            lam,
+            weights,
+            grid_metadata,
+            envelope_payload,
+            envelope_history,
+            args,
+            benchmark=benchmark,
+            terms=tuple(spec["terms"]),
+            chebyshev_degrees=tuple(spec["chebyshev_degrees"]),
+        )
+        grid_energy = candidate["training"]["linear_impurity_energy"]
+        candidate["training"]["basis_ladder_index"] = len(candidates)
+        candidate["training"]["previous_ladder_grid_energy"] = previous_grid_energy
+        candidate["training"]["grid_energy_improvement_from_previous"] = (
+            None if previous_grid_energy is None else previous_grid_energy - grid_energy
+        )
+        previous_grid_energy = grid_energy
+        candidates.append(candidate)
+    return candidates
+
+
+def train_linear_initialized_neural_candidate(
+    n: int,
+    args: argparse.Namespace,
+    *,
+    benchmark: float | None,
+) -> dict[str, Any]:
+    """Initialize a neural head from the linear impurity and optionally refine."""
+
+    model = make_linear_initialized_neural_model(n, args)
+    envelope_payload, envelope_history = fit_envelope_lbfgs(model, n, args)
+    lam, weights, grid_metadata = envelope_training_grid(n)
+    terms = tuple(args.linear_impurity_terms)
+    chebyshev_degrees = tuple(model.chebyshev_degrees)
+    linear_start = time.perf_counter()
+    result = adjoint_quadrature_linear_impurity_eigenproblem(
+        model,
+        lam,
+        weights,
+        omega=args.omega,
+        coupling=args.coupling,
+        chebyshev_degrees=chebyshev_degrees,
+        chebyshev_scale=model.scale.detach(),
+        feature_scale=model.feature_scale.detach(),
+        terms=terms,
+        tail_eps=model.tail_eps,
+        overlap_rtol=args.linear_impurity_overlap_rtol,
+    )
+    init_divisor = initialize_full_chebyshev_head_from_linear_impurity(
+        model,
+        result.coefficients,
+        terms=terms,
+        chebyshev_degrees=chebyshev_degrees,
+    )
+    linear_wall_time = time.perf_counter() - linear_start
+    initialized_obs = adjoint_quadrature_observables(
+        model,
+        lam,
+        weights,
+        omega=args.omega,
+        coupling=args.coupling,
+    )
+    initialized_moments = adjoint_quadrature_moments(
+        model,
+        lam,
+        weights,
+        omega=args.omega,
+        coupling=args.coupling,
+    )
+    history = envelope_history + [
+        {
+            "step": args.envelope_lbfgs_max_iter + 1,
+            "energy": initialized_obs.energy,
+            "radial": initialized_obs.radial,
+            "angular": initialized_obs.angular,
+            "potential": initialized_obs.potential,
+            "local_energy_std": initialized_obs.local_energy_std,
+            "virial_residual": initialized_moments.virial_residual,
+            "alpha": initialized_obs.alpha,
+            "cubic": initialized_obs.cubic,
+            "coordinate_scale": initialized_obs.coordinate_scale,
+            "linear_impurity_energy": result.energy,
+            "stage": "linear_neural_initialization",
+        }
+    ]
+
+    set_full_trainability(model, args)
+    train_start = time.perf_counter()
+    if args.linear_initialized_neural_steps > 0:
+        trainable_parameters = [
+            parameter for parameter in model.parameters() if parameter.requires_grad
+        ]
+        optimizer = torch.optim.Adam(
+            trainable_parameters,
+            lr=args.linear_initialized_neural_lr,
+        )
+        for step in range(1, args.linear_initialized_neural_steps + 1):
+            optimizer.zero_grad(set_to_none=True)
+            losses = []
+            for cloud in range(args.multicloud_clouds_per_step):
+                samples = sobol_gaussian_traceless_samples(
+                    n,
+                    args.n_samples,
+                    sigma=args.proposal_sigma,
+                    seed=args.seed + 3_000_000 * n + 10_000 * step + cloud,
+                    dtype=torch.float64,
+                )
+                energy, *_ = adjoint_importance_energy(
+                    model,
+                    samples.lam,
+                    samples.log_prob,
+                    omega=args.omega,
+                    coupling=args.coupling,
+                )
+                losses.append(energy)
+            loss = torch.stack(losses).mean()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(trainable_parameters, 10.0)
+            optimizer.step()
+
+            if (
+                step == 1
+                or step % args.report_every == 0
+                or step == args.linear_initialized_neural_steps
+            ):
+                eval_samples = sobol_gaussian_traceless_samples(
+                    n,
+                    args.n_samples,
+                    sigma=args.proposal_sigma,
+                    seed=args.seed + 4_000_000 * n + step,
+                    dtype=torch.float64,
+                )
+                obs = adjoint_importance_observables(
+                    model,
+                    eval_samples.lam,
+                    eval_samples.log_prob,
+                    omega=args.omega,
+                    coupling=args.coupling,
+                )
+                moments = adjoint_importance_moments(
+                    model,
+                    eval_samples.lam,
+                    eval_samples.log_prob,
+                    omega=args.omega,
+                    coupling=args.coupling,
+                )
+                history.append(
+                    {
+                        "step": args.envelope_lbfgs_max_iter + 1 + step,
+                        "energy": obs.energy,
+                        "radial": obs.radial,
+                        "angular": obs.angular,
+                        "potential": obs.potential,
+                        "local_energy_std": obs.local_energy_std,
+                        "virial_residual": moments.virial_residual,
+                        "alpha": obs.alpha,
+                        "cubic": obs.cubic,
+                        "coordinate_scale": obs.coordinate_scale,
+                        "stage": "multicloud_neural_refinement",
+                    }
+                )
+    train_wall_time = time.perf_counter() - train_start
+
+    training_payload = {
+        "method": (
+            "envelope LBFGS plus linear impurity generalized eigenproblem, "
+            "mapped exactly into a full Chebyshev neural coefficient head"
+        ),
+        "warm_start": envelope_payload,
+        "grid": grid_metadata,
+        "linear_impurity_energy": result.energy,
+        "initialized_quadrature_energy": initialized_obs.energy,
+        "initialized_virial_residual": initialized_moments.virial_residual,
+        "head_initialization_scale_divisor": init_divisor,
+        "retained_basis_count": result.retained_basis_count,
+        "requested_basis_count": len(terms) * len(chebyshev_degrees),
+        "basis_labels": list(result.basis_labels),
+        "linear_solve_and_init_wall_time_seconds": linear_wall_time,
+        "neural_refinement_steps": args.linear_initialized_neural_steps,
+        "neural_refinement_lr": args.linear_initialized_neural_lr,
+        "sample_count_per_cloud": args.n_samples,
+        "clouds_per_step": args.multicloud_clouds_per_step,
+        "proposal_sigma": args.proposal_sigma,
+        "wall_time_seconds": (
+            envelope_payload["wall_time_seconds"]
+            + linear_wall_time
+            + train_wall_time
+        ),
+    }
+    return summarize_candidate(
+        "linear_initialized_neural_full_head",
         model,
         args,
         benchmark=benchmark,
@@ -540,6 +1161,67 @@ def select_candidate(candidates: list[dict[str, Any]]) -> dict[str, Any]:
     )
 
 
+def linear_ladder_summary(candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Summarize linear-impurity ladder monotonicity and validation results."""
+
+    ladder = [
+        candidate
+        for candidate in candidates
+        if candidate["name"].startswith("linear_ladder_")
+    ]
+    if not ladder:
+        return None
+    grid_energies = [
+        candidate["training"]["linear_impurity_energy"]
+        for candidate in ladder
+    ]
+    independent_energies = [
+        candidate["combined_evaluation"]["energy_mean"]
+        for candidate in ladder
+    ]
+    virial_abs_max = [
+        candidate["combined_evaluation"]["virial_residual_abs_max"]
+        for candidate in ladder
+    ]
+    energy_spreads = [
+        candidate["combined_evaluation"]["energy_spread_independent_runs"]
+        for candidate in ladder
+    ]
+    passing = [
+        candidate["name"]
+        for candidate in ladder
+        if candidate["passes_validation_gates"]
+    ]
+    return {
+        "rung_names": [candidate["name"] for candidate in ladder],
+        "grid_energies": grid_energies,
+        "grid_energy_monotone_nonincreasing": all(
+            later <= earlier + 1.0e-10
+            for earlier, later in zip(grid_energies, grid_energies[1:])
+        ),
+        "independent_energy_means": independent_energies,
+        "independent_virial_abs_max": virial_abs_max,
+        "independent_energy_spreads": energy_spreads,
+        "passes_validation_gates": [
+            candidate["passes_validation_gates"]
+            for candidate in ladder
+        ],
+        "passing_rungs": passing,
+        "lowest_passing_rung": (
+            min(
+                (
+                    candidate
+                    for candidate in ladder
+                    if candidate["passes_validation_gates"]
+                ),
+                key=lambda candidate: candidate["combined_evaluation"]["energy_mean"],
+            )["name"]
+            if passing
+            else None
+        ),
+    }
+
+
 def train_one_n(n: int, args: argparse.Namespace) -> dict[str, Any]:
     if n < 2:
         raise ValueError("all N values must be at least two")
@@ -557,8 +1239,29 @@ def train_one_n(n: int, args: argparse.Namespace) -> dict[str, Any]:
         candidates.append(
             train_envelope_quadrature_candidate(n, args, benchmark=benchmark)
         )
+        if args.include_linear_impurity_candidate:
+            candidates.append(
+                train_linear_impurity_candidate(n, args, benchmark=benchmark)
+            )
+        if args.include_linear_impurity_ladder:
+            candidates.extend(
+                train_linear_impurity_ladder_candidates(n, args, benchmark=benchmark)
+            )
+        if args.include_linear_initialized_neural_candidate:
+            candidates.append(
+                train_linear_initialized_neural_candidate(
+                    n,
+                    args,
+                    benchmark=benchmark,
+                )
+            )
+        if args.include_multicloud_candidate:
+            candidates.append(
+                train_multicloud_candidate(n, args, benchmark=benchmark)
+            )
     selected = select_candidate(candidates)
     combined = selected["combined_evaluation"]
+    ladder_summary = linear_ladder_summary(candidates)
     return {
         "reference": reference,
         "training_samples": selected["training"],
@@ -580,6 +1283,7 @@ def train_one_n(n: int, args: argparse.Namespace) -> dict[str, Any]:
         "evaluations": selected["evaluations"],
         "combined_evaluation": combined,
         "structure_checks": selected["structure_checks"],
+        "linear_ladder_summary": ladder_summary,
     }
 
 
@@ -594,17 +1298,29 @@ def validation_payload(results: dict[str, Any]) -> dict[str, Any]:
         )
         checks[f"{key}_structure_exact"] = (
             structure["traceless_residual"] < 1.0e-10
-            and structure["odd_parity_residual"] < 1.0e-10
+            and structure["parity_residual"] < 1.0e-10
             and structure["weyl_covariance_residual"] < 1.0e-10
         )
         checks[f"{key}_virial_abs_lt_tol"] = (
             combined["virial_residual_abs_max"]
             < results["metadata"]["virial_abs_tol"]
         )
+        checks[f"{key}_energy_spread_lt_tol"] = (
+            combined["energy_spread_independent_runs"]
+            < results["metadata"]["energy_spread_abs_tol"]
+        )
         if "benchmark_energy" in combined:
             checks[f"{key}_benchmark_energy_error_lt_tol"] = (
                 abs(combined["energy_error"])
                 < results["metadata"]["energy_abs_tol"]
+            )
+        ladder_summary = payload.get("linear_ladder_summary")
+        if ladder_summary is not None:
+            checks[f"{key}_linear_ladder_grid_monotone"] = ladder_summary[
+                "grid_energy_monotone_nonincreasing"
+            ]
+            checks[f"{key}_linear_ladder_has_passing_rung"] = (
+                ladder_summary["lowest_passing_rung"] is not None
             )
     return {
         "all_checks_passed": all(checks.values()),
@@ -624,6 +1340,34 @@ def main() -> None:
     invalid = [n for n in args.n_values if n < 2]
     if invalid:
         raise ValueError(f"invalid N values: {invalid}")
+    if args.include_multicloud_candidate:
+        if args.multicloud_steps < 1:
+            raise ValueError("--multicloud-steps must be positive")
+        if args.multicloud_clouds_per_step < 1:
+            raise ValueError("--multicloud-clouds-per-step must be positive")
+        if args.multicloud_lr <= 0:
+            raise ValueError("--multicloud-lr must be positive")
+    if args.include_linear_impurity_candidate:
+        if args.linear_impurity_overlap_rtol <= 0:
+            raise ValueError("--linear-impurity-overlap-rtol must be positive")
+        if not args.linear_impurity_terms:
+            raise ValueError("--linear-impurity-terms must be non-empty")
+    if args.include_linear_impurity_ladder:
+        if args.linear_impurity_overlap_rtol <= 0:
+            raise ValueError("--linear-impurity-overlap-rtol must be positive")
+    if args.include_linear_initialized_neural_candidate:
+        if args.linear_impurity_overlap_rtol <= 0:
+            raise ValueError("--linear-impurity-overlap-rtol must be positive")
+        if not args.linear_impurity_terms:
+            raise ValueError("--linear-impurity-terms must be non-empty")
+        if args.linear_initialized_neural_steps < 0:
+            raise ValueError("--linear-initialized-neural-steps must be non-negative")
+        if args.linear_initialized_neural_lr <= 0:
+            raise ValueError("--linear-initialized-neural-lr must be positive")
+        if args.head_correction_scale <= 0:
+            raise ValueError(
+                "--head-correction-scale must be positive for linear initialization"
+            )
 
     results: dict[str, Any] = {
         "metadata": {
@@ -634,7 +1378,23 @@ def main() -> None:
             "seed": args.seed,
             "n_values": args.n_values,
             "training_mode": args.training_mode,
+            "parity": args.parity,
+            "include_linear_impurity_candidate": args.include_linear_impurity_candidate,
+            "include_linear_impurity_ladder": args.include_linear_impurity_ladder,
+            "include_linear_initialized_neural_candidate": (
+                args.include_linear_initialized_neural_candidate
+            ),
+            "linear_impurity_ladder_specs": linear_impurity_ladder_specs(args.parity),
+            "linear_impurity_terms": args.linear_impurity_terms,
+            "linear_impurity_overlap_rtol": args.linear_impurity_overlap_rtol,
+            "linear_initialized_neural_steps": args.linear_initialized_neural_steps,
+            "linear_initialized_neural_lr": args.linear_initialized_neural_lr,
+            "include_multicloud_candidate": args.include_multicloud_candidate,
+            "multicloud_steps": args.multicloud_steps,
+            "multicloud_clouds_per_step": args.multicloud_clouds_per_step,
+            "multicloud_lr": args.multicloud_lr,
             "energy_abs_tol": args.energy_abs_tol,
+            "energy_spread_abs_tol": args.energy_spread_abs_tol,
             "virial_abs_tol": args.virial_abs_tol,
             "min_ess_fraction": args.min_ess_fraction,
             "shared_ansatz_config": shared_ansatz_config(args),

@@ -573,6 +573,95 @@ def adjoint_even_moment_features(
     return torch.cat(features, dim=-1)
 
 
+def adjoint_shape_features(
+    lam: torch.Tensor,
+    *,
+    feature_scale: torch.Tensor | float = 1.0,
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    r"""Return radius/shape invariant features for the \(SU(4)\) quartic target.
+
+    The output is ``rho, u, v`` with
+
+    ``rho = log(1 + p2 / L**2)``, ``u = p4 / (p2**2 + eps)``, and
+    ``v = p3**2 / (p2**3 + eps)``.  These are symmetric and even under
+    ``lambda -> -lambda``.  They separate the radial scale from the two simplest
+    dimensionless shape invariants relevant once ``Tr X**4`` is independent of
+    ``(Tr X**2)**2``.
+    """
+
+    if lam.ndim != 2:
+        raise ValueError("lam must have shape (batch, n)")
+    centered = tangent_project(lam)
+    scale = torch.as_tensor(feature_scale, dtype=lam.dtype, device=lam.device)
+    if torch.any(scale <= 0):
+        raise ValueError("feature_scale must be positive")
+    eps_tensor = torch.as_tensor(eps, dtype=lam.dtype, device=lam.device)
+    p2 = torch.sum(centered**2, dim=-1, keepdim=True)
+    p3 = torch.sum(centered**3, dim=-1, keepdim=True)
+    p4 = torch.sum(centered**4, dim=-1, keepdim=True)
+    rho = torch.log1p(p2 / scale**2)
+    u = p4 / (p2**2 + eps_tensor)
+    v = p3**2 / (p2**3 + eps_tensor)
+    return torch.cat([rho, u, v], dim=-1)
+
+
+def adjoint_shape_quadratic_features(
+    lam: torch.Tensor,
+    *,
+    feature_scale: torch.Tensor | float = 1.0,
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    r"""Return ``rho,u,v`` and low-order products used by impurity ladders.
+
+    The output order is ``rho, u, v, rho**2, rho*u, rho*v``.  A linear layer
+    with a bias on these inputs can represent the default generalized
+    eigenproblem basis factors ``1, rho, u, v, rho2, rho_u, rho_v`` exactly.
+    """
+
+    features = adjoint_shape_features(
+        lam,
+        feature_scale=feature_scale,
+        eps=eps,
+    )
+    rho = features[:, 0:1]
+    u = features[:, 1:2]
+    v = features[:, 2:3]
+    return torch.cat(
+        [
+            rho,
+            u,
+            v,
+            rho * rho,
+            rho * u,
+            rho * v,
+        ],
+        dim=-1,
+    )
+
+
+def quartic_ray_wkb_tail(
+    lam: torch.Tensor,
+    *,
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    r"""Return the ray-WKB quartic action shape ``sqrt(p2) * sqrt(p4)``.
+
+    Along an eigenvalue ray ``lambda = r d`` with ``sum_i d_i**2 = 1``, the
+    quartic potential is ``g r**4 sum_i d_i**4``.  The large-field scalar action
+    therefore has the shape ``sqrt(p2) * sqrt(p4)`` rather than
+    ``sum_i |lambda_i|**3``.  The coefficient is supplied by the ansatz.
+    """
+
+    if lam.ndim != 2:
+        raise ValueError("lam must have shape (batch, n)")
+    centered = tangent_project(lam)
+    eps_tensor = torch.as_tensor(eps, dtype=lam.dtype, device=lam.device)
+    p2 = torch.sum(centered**2, dim=-1)
+    p4 = torch.sum(centered**4, dim=-1)
+    return torch.sqrt(p2 + eps_tensor**2) * torch.sqrt(p4 + eps_tensor**4)
+
+
 def chebyshev_polynomial_values(
     x: torch.Tensor,
     degrees: Sequence[int],
@@ -614,6 +703,87 @@ def centered_chebyshev_heads(
     return heads.permute(0, 2, 1)
 
 
+def adjoint_shape_factor_basis(
+    lam: torch.Tensor,
+    *,
+    feature_scale: torch.Tensor | float = 1.0,
+    terms: Sequence[str] = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v"),
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    """Return scalar invariant factors used in the linear impurity basis."""
+
+    if not terms:
+        raise ValueError("terms must be non-empty")
+    features = adjoint_shape_features(lam, feature_scale=feature_scale, eps=eps)
+    rho = features[:, 0]
+    u = features[:, 1]
+    v = features[:, 2]
+    ones = torch.ones_like(rho)
+    mapping = {
+        "1": ones,
+        "rho": rho,
+        "u": u,
+        "v": v,
+        "rho2": rho * rho,
+        "rho_u": rho * u,
+        "rho_v": rho * v,
+        "u2": u * u,
+        "u_v": u * v,
+        "v2": v * v,
+    }
+    unknown = [term for term in terms if term not in mapping]
+    if unknown:
+        raise ValueError(f"unknown shape factor terms: {unknown}")
+    return torch.stack([mapping[term] for term in terms], dim=-1)
+
+
+def adjoint_linear_impurity_basis_labels(
+    *,
+    terms: Sequence[str],
+    chebyshev_degrees: Sequence[int],
+) -> tuple[str, ...]:
+    """Return labels matching the flattened linear impurity basis order."""
+
+    return tuple(
+        f"{term}*T{degree}"
+        for term in terms
+        for degree in chebyshev_degrees
+    )
+
+
+def adjoint_linear_impurity_basis(
+    lam: torch.Tensor,
+    *,
+    chebyshev_degrees: Sequence[int] = (1, 3),
+    chebyshev_scale: torch.Tensor | float = 3.0,
+    feature_scale: torch.Tensor | float = 1.0,
+    terms: Sequence[str] = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v"),
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    r"""Return basis profiles ``phi_a(lambda) B_{k,i}(lambda)``.
+
+    The output has shape ``(batch, n_basis, n)``.  Each basis vector is
+    traceless and Weyl-covariant because it multiplies a symmetric scalar shape
+    factor by a centered Chebyshev adjoint head.
+    """
+
+    if lam.ndim != 2:
+        raise ValueError("lam must have shape (batch, n)")
+    factors = adjoint_shape_factor_basis(
+        lam,
+        feature_scale=feature_scale,
+        terms=terms,
+        eps=eps,
+    )
+    heads = centered_chebyshev_heads(
+        lam,
+        degrees=chebyshev_degrees,
+        scale=chebyshev_scale,
+    )
+    basis = factors[:, :, None, None] * heads[:, None, :, :]
+    return basis.reshape(lam.shape[0], len(terms) * len(chebyshev_degrees), lam.shape[1])
+
+
 class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
     r"""General SU(N) spectral-impurity ansatz from ``tex/suN_adjoint_ansatz``.
 
@@ -635,13 +805,18 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         omega_init: float = 1.0,
         quartic_tail_init: float = 0.0,
         moment_cutoff: int = 6,
+        feature_mode: str = "raw_moments",
+        feature_scale_init: float = 1.0,
+        learn_feature_scale: bool = False,
         chebyshev_degrees: Sequence[int] = (1, 3, 5, 7),
+        parity: str = "odd",
         scale_init: float = 3.0,
         learn_scale: bool = False,
         coordinate_scale_init: float = 1.0,
         learn_coordinate_scale: bool = False,
         hidden_layers: Sequence[int] = (32, 32),
         head_hidden_layers: Sequence[int] = (32,),
+        head_coefficient_mode: str = "full",
         action_correction_scale: float = 1.0,
         head_correction_scale: float = 1.0,
         alpha_floor: float = 1.0e-8,
@@ -658,6 +833,13 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             raise ValueError("omega_init must be larger than alpha_floor")
         if quartic_tail_init < 0:
             raise ValueError("quartic_tail_init must be non-negative")
+        if feature_mode not in {"raw_moments", "shape", "shape_quadratic"}:
+            raise ValueError(
+                "feature_mode must be 'raw_moments', 'shape', or "
+                "'shape_quadratic'"
+            )
+        if feature_scale_init <= 0:
+            raise ValueError("feature_scale_init must be positive")
         if scale_init <= 0:
             raise ValueError("scale_init must be positive")
         if coordinate_scale_init <= 0:
@@ -666,18 +848,31 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             raise ValueError("action_correction_scale must be non-negative")
         if head_correction_scale < 0:
             raise ValueError("head_correction_scale must be non-negative")
+        if head_coefficient_mode not in {"anchored", "full"}:
+            raise ValueError("head_coefficient_mode must be 'anchored' or 'full'")
+        if parity not in {"odd", "even"}:
+            raise ValueError("parity must be 'odd' or 'even'")
         if not chebyshev_degrees:
             raise ValueError("chebyshev_degrees must be non-empty")
-        if int(chebyshev_degrees[0]) != 1:
-            raise ValueError("the first Chebyshev degree must be one")
+        expected_degree_parity = 1 if parity == "odd" else 0
+        if any(int(degree) % 2 != expected_degree_parity for degree in chebyshev_degrees):
+            raise ValueError(f"{parity} parity requires {parity} Chebyshev degrees")
+        first_degree = int(chebyshev_degrees[0])
+        if parity == "odd" and first_degree != 1:
+            raise ValueError("the first odd Chebyshev degree must be one")
+        if parity == "even" and first_degree != 2:
+            raise ValueError("the first even Chebyshev degree must be two")
 
         self.n = int(n)
         self.moment_cutoff = int(moment_cutoff)
+        self.feature_mode = feature_mode
+        self.parity = parity
         self.chebyshev_degrees = tuple(int(degree) for degree in chebyshev_degrees)
         self.alpha_floor = float(alpha_floor)
         self.cubic_floor = float(cubic_floor)
         self.tail_eps = float(tail_eps)
         self.learn_scale = bool(learn_scale)
+        self.head_coefficient_mode = head_coefficient_mode
         self.action_correction_scale = float(action_correction_scale)
         self.head_correction_scale = float(head_correction_scale)
 
@@ -697,6 +892,13 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             raw_scale.clone().detach(),
             requires_grad=learn_scale,
         )
+        raw_feature_scale = _inverse_softplus(
+            torch.as_tensor(feature_scale_init, dtype=dtype)
+        )
+        self.raw_feature_scale = nn.Parameter(
+            raw_feature_scale.clone().detach(),
+            requires_grad=learn_feature_scale,
+        )
         raw_coordinate_scale = _inverse_softplus(
             torch.as_tensor(coordinate_scale_init, dtype=dtype)
         )
@@ -705,7 +907,12 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             requires_grad=learn_coordinate_scale,
         )
 
-        feature_count = self.moment_cutoff - 1
+        if self.feature_mode == "shape":
+            feature_count = 3
+        elif self.feature_mode == "shape_quadratic":
+            feature_count = 6
+        else:
+            feature_count = self.moment_cutoff - 1
         action_layers: list[nn.Module] = []
         in_features = feature_count
         for width in hidden_layers:
@@ -715,20 +922,19 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         action_layers.append(nn.Linear(in_features, 1, dtype=dtype))
         self.net = nn.Sequential(*action_layers)
 
-        if len(self.chebyshev_degrees) > 1:
+        head_output_dim = (
+            len(self.chebyshev_degrees)
+            if self.head_coefficient_mode == "full"
+            else len(self.chebyshev_degrees) - 1
+        )
+        if head_output_dim > 0:
             head_layers: list[nn.Module] = []
             in_features = feature_count
             for width in head_hidden_layers:
                 head_layers.append(nn.Linear(in_features, int(width), dtype=dtype))
                 head_layers.append(activation())
                 in_features = int(width)
-            head_layers.append(
-                nn.Linear(
-                    in_features,
-                    len(self.chebyshev_degrees) - 1,
-                    dtype=dtype,
-                )
-            )
+            head_layers.append(nn.Linear(in_features, head_output_dim, dtype=dtype))
             self.head_net: nn.Sequential | None = nn.Sequential(*head_layers)
         else:
             self.head_net = None
@@ -756,6 +962,10 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         return torch.nn.functional.softplus(self.raw_scale)
 
     @property
+    def feature_scale(self) -> torch.Tensor:
+        return torch.nn.functional.softplus(self.raw_feature_scale)
+
+    @property
     def coordinate_scale(self) -> torch.Tensor:
         return torch.nn.functional.softplus(self.raw_coordinate_scale)
 
@@ -763,8 +973,21 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         return self.coordinate_scale * tangent_project(lam)
 
     def invariant_features(self, lam: torch.Tensor) -> torch.Tensor:
+        centered = self.spectral_coordinates(lam)
+        if self.feature_mode == "shape":
+            return adjoint_shape_features(
+                centered,
+                feature_scale=self.feature_scale,
+                eps=self.tail_eps,
+            )
+        if self.feature_mode == "shape_quadratic":
+            return adjoint_shape_quadratic_features(
+                centered,
+                feature_scale=self.feature_scale,
+                eps=self.tail_eps,
+            )
         return adjoint_even_moment_features(
-            self.spectral_coordinates(lam),
+            centered,
             moment_cutoff=self.moment_cutoff,
         )
 
@@ -775,10 +998,7 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             raise ValueError(f"lam must have shape (batch, {self.n})")
         centered = self.spectral_coordinates(lam)
         p2 = torch.sum(centered**2, dim=-1)
-        quartic_tail = torch.sum(
-            (centered**2 + self.tail_eps**2) ** 1.5,
-            dim=-1,
-        )
+        quartic_tail = quartic_ray_wkb_tail(centered, eps=self.tail_eps)
         return (
             self.alpha * p2
             + self.cubic * quartic_tail
@@ -793,21 +1013,57 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             scale=self.scale,
         )
 
+    def head_coefficients(self, lam: torch.Tensor) -> torch.Tensor:
+        """Return Chebyshev coefficients ``c_k(m)`` for each sample.
+
+        The ``"full"`` mode implements the ansatz proposed in
+        ``tex/suN_adjoint_ansatz.tex``: every included Chebyshev coefficient,
+        including the leading harmonic head, can depend on invariant features.
+        The coefficients are initialized around ``(1, 0, ..., 0)`` so the
+        harmonic adjoint profile remains the default starting point.
+
+        The legacy ``"anchored"`` mode keeps the leading coefficient fixed to
+        one and only learns corrections to higher Chebyshev heads.
+        """
+
+        if lam.ndim != 2 or lam.shape[-1] != self.n:
+            raise ValueError(f"lam must have shape (batch, {self.n})")
+        n_degrees = len(self.chebyshev_degrees)
+        base = torch.zeros(
+            lam.shape[0],
+            n_degrees,
+            dtype=lam.dtype,
+            device=lam.device,
+        )
+        base[:, 0] = 1.0
+        if self.head_coefficient_mode == "anchored":
+            if n_degrees == 1:
+                return base
+            if self.head_net is None:
+                raise RuntimeError("head_net is missing for multi-head ansatz")
+            correction = (
+                self.head_correction_scale
+                * self.head_net(self.invariant_features(lam))
+            )
+            coeffs = base.clone()
+            coeffs[:, 1:] = correction
+            return coeffs
+        if self.head_net is None:
+            raise RuntimeError("head_net is missing for full coefficient ansatz")
+        return (
+            base
+            + self.head_correction_scale
+            * self.head_net(self.invariant_features(lam))
+        )
+
     def head(self, lam: torch.Tensor) -> torch.Tensor:
-        """Return the traceless odd Weyl-covariant Chebyshev impurity head."""
+        """Return the traceless Weyl-covariant Chebyshev impurity head."""
 
         if lam.ndim != 2 or lam.shape[-1] != self.n:
             raise ValueError(f"lam must have shape (batch, {self.n})")
         basis = self.head_basis(lam)
-        head = basis[:, 0, :]
-        if len(self.chebyshev_degrees) > 1:
-            if self.head_net is None:
-                raise RuntimeError("head_net is missing for multi-head ansatz")
-            coeffs = (
-                self.head_correction_scale
-                * self.head_net(self.invariant_features(lam))
-            )
-            head = head + torch.sum(coeffs[:, :, None] * basis[:, 1:, :], dim=1)
+        coeffs = self.head_coefficients(lam)
+        head = torch.sum(coeffs[:, :, None] * basis, dim=1)
         return tangent_project(head)
 
     def profile(self, lam: torch.Tensor) -> torch.Tensor:
@@ -836,10 +1092,245 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         degrees = ",".join(str(degree) for degree in self.chebyshev_degrees)
         return (
             f"SU({self.n}), degrees=({degrees}), "
+            f"parity={self.parity}, "
+            f"feature_mode={self.feature_mode}, "
+            f"head_coefficient_mode={self.head_coefficient_mode}, "
             f"alpha={float(self.alpha.detach()):.6g}, "
             f"cubic={float(self.cubic.detach()):.6g}, "
-            f"scale={float(self.scale.detach()):.6g}, "
+            f"cheb_scale={float(self.scale.detach()):.6g}, "
+            f"feature_scale={float(self.feature_scale.detach()):.6g}, "
             f"coordinate_scale={float(self.coordinate_scale.detach()):.6g}"
+        )
+
+
+def initialize_full_chebyshev_head_from_linear_impurity(
+    model: SUNAdjointChebyshevSpectralAnsatz,
+    coefficients: torch.Tensor,
+    *,
+    terms: Sequence[str],
+    chebyshev_degrees: Sequence[int],
+    normalize_leading: bool = True,
+    leading_abs_tol: float = 1.0e-12,
+) -> float:
+    r"""Initialize a full Chebyshev coefficient head from a linear impurity.
+
+    This maps coefficients for basis functions
+    ``phi_alpha(lambda) B_{k,i}(lambda)`` into a neural coefficient head
+    ``c_k(features)``.  It is exact only for a full coefficient ansatz with
+    ``feature_mode="shape_quadratic"`` and no hidden layers in the head
+    network.  The default term set
+    ``1, rho, u, v, rho2, rho_u, rho_v`` is then represented by the final
+    linear layer bias and weights.
+
+    The linear generalized eigenvector has arbitrary overall normalization.
+    With ``normalize_leading=True`` the coefficients are rescaled so the
+    constant coefficient of the first Chebyshev degree is one, matching the
+    harmonic initialization convention.  The returned float is the divisor used
+    for this rescaling.
+    """
+
+    if model.head_coefficient_mode != "full":
+        raise ValueError("linear initialization requires head_coefficient_mode='full'")
+    if model.feature_mode != "shape_quadratic":
+        raise ValueError("linear initialization requires feature_mode='shape_quadratic'")
+    if tuple(int(degree) for degree in chebyshev_degrees) != model.chebyshev_degrees:
+        raise ValueError("chebyshev_degrees must match model.chebyshev_degrees")
+    if model.head_net is None:
+        raise ValueError("model must have a trainable full coefficient head")
+    linear_layers = [
+        module for module in model.head_net if isinstance(module, nn.Linear)
+    ]
+    if len(linear_layers) != 1 or len(model.head_net) != 1:
+        raise ValueError(
+            "exact linear initialization requires head_hidden_layers=()"
+        )
+    final = linear_layers[0]
+
+    terms = tuple(terms)
+    degrees = tuple(int(degree) for degree in chebyshev_degrees)
+    if coefficients.ndim != 1:
+        raise ValueError("coefficients must be one-dimensional")
+    if coefficients.numel() != len(terms) * len(degrees):
+        raise ValueError("coefficient count does not match terms and degrees")
+
+    input_index = {
+        "rho": 0,
+        "u": 1,
+        "v": 2,
+        "rho2": 3,
+        "rho_u": 4,
+        "rho_v": 5,
+    }
+    unsupported = [term for term in terms if term != "1" and term not in input_index]
+    if unsupported:
+        raise ValueError(
+            "shape_quadratic head cannot exactly represent terms: "
+            f"{unsupported}"
+        )
+
+    matrix = coefficients.to(
+        dtype=final.weight.dtype,
+        device=final.weight.device,
+    ).reshape(len(terms), len(degrees))
+    scale_divisor = torch.as_tensor(
+        1.0,
+        dtype=final.weight.dtype,
+        device=final.weight.device,
+    )
+    if normalize_leading:
+        if "1" not in terms:
+            raise ValueError("normalize_leading=True requires the constant term '1'")
+        scale_divisor = matrix[terms.index("1"), 0].detach().clone()
+        if torch.abs(scale_divisor).item() < leading_abs_tol:
+            raise ValueError("leading linear impurity coefficient is too small")
+        matrix = matrix / scale_divisor
+
+    base = torch.zeros(
+        len(degrees),
+        dtype=final.weight.dtype,
+        device=final.weight.device,
+    )
+    base[0] = 1.0
+    head_scale = torch.as_tensor(
+        model.head_correction_scale,
+        dtype=final.weight.dtype,
+        device=final.weight.device,
+    )
+    if torch.abs(head_scale).item() < leading_abs_tol:
+        raise ValueError("head_correction_scale must be nonzero for initialization")
+
+    with torch.no_grad():
+        final.weight.zero_()
+        final.bias.copy_((matrix[terms.index("1")] - base) / head_scale)
+        for term_index, term in enumerate(terms):
+            if term == "1":
+                continue
+            final.weight[:, input_index[term]].copy_(
+                matrix[term_index] / head_scale
+            )
+
+    return float(scale_divisor.detach().cpu())
+
+
+class SUNAdjointLinearImpurityAnsatz(nn.Module):
+    r"""Fixed-envelope adjoint ansatz with a solved linear impurity head.
+
+    The scalar envelope is supplied by ``envelope_model``.  The head is a fixed
+    linear combination of the basis ``phi_a(lambda) B_{k,i}(lambda)`` used in
+    the generalized-eigenproblem impurity baseline.
+    """
+
+    def __init__(
+        self,
+        *,
+        envelope_model: nn.Module,
+        coefficients: torch.Tensor,
+        chebyshev_degrees: Sequence[int] = (1, 3),
+        parity: str = "odd",
+        chebyshev_scale: torch.Tensor | float = 3.0,
+        feature_scale: torch.Tensor | float = 1.0,
+        terms: Sequence[str] = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v"),
+        tail_eps: float = 1.0e-12,
+    ) -> None:
+        super().__init__()
+        if not hasattr(envelope_model, "n"):
+            raise ValueError("envelope_model must expose an SU(N) attribute n")
+        if coefficients.ndim != 1:
+            raise ValueError("coefficients must be a one-dimensional tensor")
+        if parity not in {"odd", "even"}:
+            raise ValueError("parity must be 'odd' or 'even'")
+        expected_degree_parity = 1 if parity == "odd" else 0
+        if any(int(degree) % 2 != expected_degree_parity for degree in chebyshev_degrees):
+            raise ValueError(f"{parity} parity requires {parity} Chebyshev degrees")
+        expected = len(terms) * len(chebyshev_degrees)
+        if coefficients.shape[0] != expected:
+            raise ValueError(
+                f"expected {expected} coefficients, got {coefficients.shape[0]}"
+            )
+        scale = torch.as_tensor(
+            chebyshev_scale,
+            dtype=coefficients.dtype,
+            device=coefficients.device,
+        )
+        feature_scale_tensor = torch.as_tensor(
+            feature_scale,
+            dtype=coefficients.dtype,
+            device=coefficients.device,
+        )
+        if torch.any(scale <= 0):
+            raise ValueError("chebyshev_scale must be positive")
+        if torch.any(feature_scale_tensor <= 0):
+            raise ValueError("feature_scale must be positive")
+
+        self.envelope_model = envelope_model
+        self.n = int(envelope_model.n)
+        self.chebyshev_degrees = tuple(int(degree) for degree in chebyshev_degrees)
+        self.parity = parity
+        self.terms = tuple(terms)
+        self.tail_eps = float(tail_eps)
+        self.register_buffer("coefficients", coefficients.detach().clone())
+        self.register_buffer("linear_chebyshev_scale", scale.detach().clone())
+        self.register_buffer("linear_feature_scale", feature_scale_tensor.detach().clone())
+
+    @property
+    def alpha(self) -> torch.Tensor:
+        return self.envelope_model.alpha
+
+    @property
+    def cubic(self) -> torch.Tensor:
+        return self.envelope_model.cubic
+
+    @property
+    def coordinate_scale(self) -> torch.Tensor:
+        coordinate_scale = getattr(self.envelope_model, "coordinate_scale", None)
+        if coordinate_scale is None:
+            return torch.as_tensor(
+                1.0,
+                dtype=self.coefficients.dtype,
+                device=self.coefficients.device,
+            )
+        return coordinate_scale
+
+    def action(self, lam: torch.Tensor) -> torch.Tensor:
+        return self.envelope_model.action(lam)
+
+    def head_basis(self, lam: torch.Tensor) -> torch.Tensor:
+        return adjoint_linear_impurity_basis(
+            lam,
+            chebyshev_degrees=self.chebyshev_degrees,
+            chebyshev_scale=self.linear_chebyshev_scale,
+            feature_scale=self.linear_feature_scale,
+            terms=self.terms,
+            eps=self.tail_eps,
+        )
+
+    def head(self, lam: torch.Tensor) -> torch.Tensor:
+        basis = self.head_basis(lam)
+        return tangent_project(torch.einsum("sai,a->si", basis, self.coefficients))
+
+    def profile(self, lam: torch.Tensor) -> torch.Tensor:
+        return torch.exp(-0.5 * self.action(lam))[:, None] * self.head(lam)
+
+    def log_density_eigenvalues(self, lam: torch.Tensor) -> torch.Tensor:
+        head = self.head(lam)
+        amplitude = torch.sum(head**2, dim=-1)
+        return (
+            2.0 * log_vandermonde_abs(lam)
+            - self.action(lam)
+            + torch.log(amplitude)
+        )
+
+    def log_psi(self, z: torch.Tensor) -> torch.Tensor:
+        lam = eigenvalues_from_traceless_coordinates(z, n=self.n)
+        return 0.5 * self.log_density_eigenvalues(lam)
+
+    def extra_repr(self) -> str:
+        degrees = ",".join(str(degree) for degree in self.chebyshev_degrees)
+        return (
+            f"SU({self.n}), linear_basis={len(self.coefficients)}, "
+            f"degrees=({degrees}), parity={self.parity}, "
+            f"alpha={float(self.alpha.detach()):.6g}, "
+            f"cubic={float(self.cubic.detach()):.6g}"
         )
 
 
@@ -992,6 +1483,20 @@ class AdjointStructureDiagnostics:
 
 
 @dataclass(frozen=True)
+class AdjointLinearImpurityResult:
+    """Solved generalized-eigenproblem impurity baseline."""
+
+    energy: float
+    coefficients: torch.Tensor
+    eigenvalues: torch.Tensor
+    overlap_eigenvalues: torch.Tensor
+    retained_basis_count: int
+    basis_labels: tuple[str, ...]
+    hamiltonian_matrix: torch.Tensor
+    overlap_matrix: torch.Tensor
+
+
+@dataclass(frozen=True)
 class SU2RadialFiniteDifferenceResult:
     """Lowest radial finite-difference eigenpair for the SU(2) adjoint sector."""
 
@@ -1091,6 +1596,202 @@ def _model_coordinate_scale_value(model: nn.Module) -> float:
     if coordinate_scale is None:
         return 1.0
     return float(coordinate_scale.detach())
+
+
+def _linear_impurity_matrices_from_log_measure(
+    envelope_model: nn.Module,
+    lam: torch.Tensor,
+    log_measure: torch.Tensor,
+    *,
+    omega: float = 1.0,
+    coupling: float = 0.0,
+    chebyshev_degrees: Sequence[int] = (1, 3),
+    chebyshev_scale: torch.Tensor | float = 3.0,
+    feature_scale: torch.Tensor | float = 1.0,
+    terms: Sequence[str] = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v"),
+    tail_eps: float = 1.0e-12,
+    gap_eps: float = 1.0e-12,
+) -> tuple[torch.Tensor, torch.Tensor, tuple[str, ...]]:
+    """Assemble linear impurity Hamiltonian and overlap matrices."""
+
+    if lam.ndim != 2:
+        raise ValueError("lam must have shape (batch, n)")
+    if log_measure.ndim != 1 or log_measure.shape[0] != lam.shape[0]:
+        raise ValueError("log_measure must have shape (batch,)")
+    if gap_eps < 0:
+        raise ValueError("gap_eps must be non-negative")
+
+    n = lam.shape[-1]
+    lam_req = tangent_project(lam.detach().clone()).requires_grad_(True)
+    action = envelope_model.action(lam_req)
+    (action_grad,) = torch.autograd.grad(
+        action,
+        lam_req,
+        grad_outputs=torch.ones_like(action),
+        retain_graph=True,
+    )
+    action_grad = tangent_project(action_grad)
+    basis = adjoint_linear_impurity_basis(
+        lam_req,
+        chebyshev_degrees=chebyshev_degrees,
+        chebyshev_scale=chebyshev_scale,
+        feature_scale=feature_scale,
+        terms=terms,
+        eps=tail_eps,
+    )
+    basis_count = basis.shape[1]
+    covariant_grads = torch.empty(
+        (lam.shape[0], basis_count, n, n),
+        dtype=lam.dtype,
+        device=lam.device,
+    )
+    for basis_index in range(basis_count):
+        for color_index in range(n):
+            (head_grad,) = torch.autograd.grad(
+                basis[:, basis_index, color_index],
+                lam_req,
+                grad_outputs=torch.ones_like(basis[:, basis_index, color_index]),
+                retain_graph=True,
+            )
+            tangent_head_grad = tangent_project(head_grad)
+            covariant_grads[:, basis_index, color_index, :] = (
+                tangent_head_grad
+                - 0.5 * basis[:, basis_index, color_index, None] * action_grad
+            )
+
+    radial_density = 0.5 * torch.einsum(
+        "saic,sbic->sab",
+        covariant_grads,
+        covariant_grads,
+    )
+    angular_density = torch.zeros(
+        (lam.shape[0], basis_count, basis_count),
+        dtype=lam.dtype,
+        device=lam.device,
+    )
+    for i in range(n):
+        for j in range(i + 1, n):
+            gap = lam_req[:, i] - lam_req[:, j]
+            if gap_eps > 0.0:
+                sign = torch.where(gap >= 0.0, 1.0, -1.0)
+                gap = torch.where(torch.abs(gap) < gap_eps, sign * gap_eps, gap)
+            divided_difference = (basis[:, :, i] - basis[:, :, j]) / gap[:, None]
+            angular_density = angular_density + torch.einsum(
+                "sa,sb->sab",
+                divided_difference,
+                divided_difference,
+            )
+
+    overlap_density = torch.einsum("sai,sbi->sab", basis, basis)
+    potential = adjoint_matrix_potential(lam_req, omega=omega, coupling=coupling)
+    hamiltonian_density = (
+        radial_density
+        + angular_density
+        + potential[:, None, None] * overlap_density
+    )
+    log_weights = (
+        log_measure.to(dtype=lam.dtype, device=lam.device)
+        + 2.0 * log_vandermonde_abs(lam_req)
+        - action
+    )
+    shift = torch.max(log_weights.detach())
+    weights = torch.exp(log_weights - shift)
+    hamiltonian = torch.einsum("s,sab->ab", weights, hamiltonian_density)
+    overlap = torch.einsum("s,sab->ab", weights, overlap_density)
+    hamiltonian = 0.5 * (hamiltonian + hamiltonian.T)
+    overlap = 0.5 * (overlap + overlap.T)
+    labels = adjoint_linear_impurity_basis_labels(
+        terms=terms,
+        chebyshev_degrees=chebyshev_degrees,
+    )
+    return hamiltonian.detach(), overlap.detach(), labels
+
+
+def solve_adjoint_linear_impurity_eigenproblem(
+    hamiltonian: torch.Tensor,
+    overlap: torch.Tensor,
+    *,
+    basis_labels: Sequence[str],
+    overlap_rtol: float = 1.0e-10,
+) -> AdjointLinearImpurityResult:
+    """Solve ``H c = E M c`` after removing near-null overlap directions."""
+
+    if hamiltonian.ndim != 2 or hamiltonian.shape[0] != hamiltonian.shape[1]:
+        raise ValueError("hamiltonian must be a square matrix")
+    if overlap.shape != hamiltonian.shape:
+        raise ValueError("overlap must have the same shape as hamiltonian")
+    if len(basis_labels) != hamiltonian.shape[0]:
+        raise ValueError("basis_labels length must match the matrix size")
+    if overlap_rtol <= 0:
+        raise ValueError("overlap_rtol must be positive")
+
+    overlap_eigenvalues, overlap_vectors = torch.linalg.eigh(overlap)
+    max_overlap = torch.max(overlap_eigenvalues)
+    keep = overlap_eigenvalues > overlap_rtol * max_overlap
+    if int(torch.sum(keep).item()) < 1:
+        raise ValueError("all linear impurity directions were overlap-null")
+    transform = overlap_vectors[:, keep] / torch.sqrt(overlap_eigenvalues[keep])[None, :]
+    projected_hamiltonian = transform.T @ hamiltonian @ transform
+    projected_hamiltonian = 0.5 * (projected_hamiltonian + projected_hamiltonian.T)
+    eigenvalues, eigenvectors = torch.linalg.eigh(projected_hamiltonian)
+    coefficients = transform @ eigenvectors[:, 0]
+    norm = coefficients @ overlap @ coefficients
+    coefficients = coefficients / torch.sqrt(norm)
+    pivot = int(torch.argmax(torch.abs(coefficients)).item())
+    if coefficients[pivot] < 0:
+        coefficients = -coefficients
+    return AdjointLinearImpurityResult(
+        energy=float(eigenvalues[0].detach()),
+        coefficients=coefficients.detach(),
+        eigenvalues=eigenvalues.detach(),
+        overlap_eigenvalues=overlap_eigenvalues.detach(),
+        retained_basis_count=int(torch.sum(keep).item()),
+        basis_labels=tuple(basis_labels),
+        hamiltonian_matrix=hamiltonian.detach(),
+        overlap_matrix=overlap.detach(),
+    )
+
+
+def adjoint_quadrature_linear_impurity_eigenproblem(
+    envelope_model: nn.Module,
+    lam: torch.Tensor,
+    weights: torch.Tensor,
+    *,
+    omega: float = 1.0,
+    coupling: float = 0.0,
+    chebyshev_degrees: Sequence[int] = (1, 3),
+    chebyshev_scale: torch.Tensor | float = 3.0,
+    feature_scale: torch.Tensor | float = 1.0,
+    terms: Sequence[str] = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v"),
+    tail_eps: float = 1.0e-12,
+    gap_eps: float = 1.0e-12,
+    overlap_rtol: float = 1.0e-10,
+) -> AdjointLinearImpurityResult:
+    """Solve the fixed-envelope linear impurity problem on a quadrature grid."""
+
+    if weights.ndim != 1 or weights.shape[0] != lam.shape[0]:
+        raise ValueError("weights must have shape (batch,)")
+    if torch.any(weights <= 0):
+        raise ValueError("weights must be positive")
+    hamiltonian, overlap, labels = _linear_impurity_matrices_from_log_measure(
+        envelope_model,
+        lam,
+        torch.log(weights),
+        omega=omega,
+        coupling=coupling,
+        chebyshev_degrees=chebyshev_degrees,
+        chebyshev_scale=chebyshev_scale,
+        feature_scale=feature_scale,
+        terms=terms,
+        tail_eps=tail_eps,
+        gap_eps=gap_eps,
+    )
+    return solve_adjoint_linear_impurity_eigenproblem(
+        hamiltonian,
+        overlap,
+        basis_labels=labels,
+        overlap_rtol=overlap_rtol,
+    )
 
 
 def sobol_gaussian_traceless_samples(
@@ -1287,6 +1988,17 @@ def _collision_probe_points(
     return torch.stack(near_points), torch.stack(limit_points), pairs
 
 
+def _model_parity_sign(model: nn.Module) -> float:
+    """Return profile sign under ``lambda -> -lambda`` for parity diagnostics."""
+
+    parity = getattr(model, "parity", "odd")
+    if parity == "odd":
+        return -1.0
+    if parity == "even":
+        return 1.0
+    raise ValueError("model parity must be 'odd' or 'even'")
+
+
 def adjoint_structure_diagnostics(
     model: SUNAdjointRadialSpectralAnsatz,
     lam: torch.Tensor,
@@ -1302,7 +2014,8 @@ def adjoint_structure_diagnostics(
     with torch.no_grad():
         profile = model.profile(lam)
         traceless = torch.max(torch.abs(torch.sum(profile, dim=-1)))
-        parity = torch.max(torch.abs(model.profile(-lam) + profile))
+        parity_sign = _model_parity_sign(model)
+        parity = torch.max(torch.abs(model.profile(-lam) - parity_sign * profile))
 
         weyl = torch.zeros((), dtype=lam.dtype, device=lam.device)
         for perm in permutations(range(n)):
@@ -1414,7 +2127,8 @@ def adjoint_quadrature_observables(
             density_weights * (finite_local_energy - local_mean) ** 2
         )
         profile = model.profile(lam)
-        parity = torch.max(torch.abs(model.profile(-lam) + profile))
+        parity_sign = _model_parity_sign(model)
+        parity = torch.max(torch.abs(model.profile(-lam) - parity_sign * profile))
 
     return AdjointObservables(
         energy=float(energy.detach()),
@@ -1488,7 +2202,8 @@ def adjoint_importance_observables(
             density_weights * (finite_local_energy - local_mean) ** 2
         )
         profile = model.profile(lam)
-        parity = torch.max(torch.abs(model.profile(-lam) + profile))
+        parity_sign = _model_parity_sign(model)
+        parity = torch.max(torch.abs(model.profile(-lam) - parity_sign * profile))
 
     return AdjointObservables(
         energy=float(energy.detach()),
