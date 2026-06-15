@@ -92,3 +92,61 @@ class GaussianEnvelopeMLP(nn.Module):
 
     def extra_repr(self) -> str:
         return f"dim={self.dim}, alpha={float(self.alpha.detach()):.6g}"
+
+
+class SeparableGaussianEnvelopeMLP(nn.Module):
+    r"""Product wavefunction with a shared one-dimensional neural factor.
+
+    The ansatz is
+
+    .. math::
+
+       \log \psi_\theta(x_1,\ldots,x_D)
+       =
+       \sum_{i=1}^D
+       \left[-\frac12\alpha x_i^2 + f_\theta(x_i^2)\right].
+
+    This is appropriate for separable benchmark Hamiltonians.  It is not a
+    general interacting many-coordinate ansatz.
+    """
+
+    def __init__(
+        self,
+        dim: int = 1,
+        hidden_layers: Sequence[int] = (32, 32),
+        init_alpha: float = 1.0,
+        alpha_floor: float = 1.0e-6,
+        activation: type[nn.Module] = nn.Tanh,
+        zero_final: bool = True,
+        dtype: torch.dtype = torch.float64,
+    ) -> None:
+        super().__init__()
+        if dim < 1:
+            raise ValueError("dim must be positive")
+        self.dim = int(dim)
+        self.one_body = GaussianEnvelopeMLP(
+            dim=1,
+            hidden_layers=hidden_layers,
+            feature_map=EvenFeatureMap(),
+            init_alpha=init_alpha,
+            alpha_floor=alpha_floor,
+            activation=activation,
+            zero_final=zero_final,
+            dtype=dtype,
+        )
+
+    @property
+    def alpha(self) -> torch.Tensor:
+        return self.one_body.alpha
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.log_psi(x)
+
+    def log_psi(self, x: torch.Tensor) -> torch.Tensor:
+        if x.ndim != 2 or x.shape[-1] != self.dim:
+            raise ValueError(f"x must have shape (batch, {self.dim})")
+        one_body_values = self.one_body.log_psi(x.reshape(-1, 1))
+        return one_body_values.reshape(x.shape[0], self.dim).sum(dim=-1)
+
+    def extra_repr(self) -> str:
+        return f"dim={self.dim}, alpha={float(self.alpha.detach()):.6g}"

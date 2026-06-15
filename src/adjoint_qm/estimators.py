@@ -203,6 +203,7 @@ def vmc_observables(
     model: torch.nn.Module,
     potential: Potential,
     samples: torch.Tensor,
+    batch_size: int | None = None,
 ) -> VMCObservables:
     """Compute sample averages and local-energy diagnostics."""
 
@@ -210,13 +211,27 @@ def vmc_observables(
         raise ValueError("samples must have shape (sample_count, dim)")
     if samples.shape[0] < 2:
         raise ValueError("at least two samples are required for covariance diagnostics")
+    if batch_size is not None and batch_size < 1:
+        raise ValueError("batch_size must be positive when provided")
 
-    e_local = local_energy(model, potential, samples)
-    x_req = samples.detach().clone().requires_grad_(True)
-    grad = grad_log_psi(model, x_req)
-    kinetic_density = 0.5 * torch.sum(grad**2, dim=-1)
-    potential_density = potential(x_req)
-    virial_density = potential.virial(x_req)
+    e_local_parts: list[torch.Tensor] = []
+    kinetic_parts: list[torch.Tensor] = []
+    potential_parts: list[torch.Tensor] = []
+    virial_parts: list[torch.Tensor] = []
+    chunk_size = samples.shape[0] if batch_size is None else batch_size
+    for start in range(0, samples.shape[0], chunk_size):
+        chunk = samples[start : start + chunk_size]
+        e_local_parts.append(local_energy(model, potential, chunk).detach())
+        x_req = chunk.detach().clone().requires_grad_(True)
+        grad = grad_log_psi(model, x_req)
+        kinetic_parts.append((0.5 * torch.sum(grad**2, dim=-1)).detach())
+        potential_parts.append(potential(x_req).detach())
+        virial_parts.append(potential.virial(x_req).detach())
+
+    e_local = torch.cat(e_local_parts, dim=0)
+    kinetic_density = torch.cat(kinetic_parts, dim=0)
+    potential_density = torch.cat(potential_parts, dim=0)
+    virial_density = torch.cat(virial_parts, dim=0)
 
     with torch.no_grad():
         n = samples.shape[0]

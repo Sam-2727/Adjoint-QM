@@ -1,30 +1,5 @@
 # Adjoint-QM
 
-Early-stage research code for neural variational benchmarks in quantum mechanics.
+The goal of this repository is eventually to solve solve for the exact wavefunction of SU(N)-invariant quantum mechanics models, potentially with fermions. A physics motivation would be to obtain the ground state wavefunction of the BFSS matrix quantum mechanics (MQM) model.
 
-The first benchmark is the one-dimensional harmonic oscillator ground state,
-implemented with a parity-even Gaussian-envelope neural wavefunction.  It is
-intended as the simplest exact check before moving to finite-`N` matrix quantum
-mechanics.
-
-The harmonic oscillator notebook may run training directly because the benchmark
-is tiny.  Future expensive or production-quality runs should be performed by
-reproducible Python scripts, with notebooks used only to load saved diagnostics,
-compare against benchmarks, and explain the results.
-
-Run the initial benchmark with:
-
-```bash
-python scripts/train_ho_ground.py
-```
-
-Tests are focused on exact harmonic-oscillator identities and smoke checks:
-
-```bash
-pytest
-```
-
-The library also includes a small Krylov/Lanczos time-evolution utility for
-approximating Euclidean correlators of the form
-`<phi|exp[-tau (H - E0)]|phi>` without explicitly solving for all excited
-states.
+Right now, the repository mainly contains basic bosonic tests. The harmonic/anharmonic 1d and 6d models have been checked against traditional numerical methods. The adjoint sector of SU(N)-invariant QM with X^4 potential has been checked against the 1d radial solution for N=2,3 and a few numerical checks have been performed for N=5.

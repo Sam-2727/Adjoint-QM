@@ -17,6 +17,7 @@ class VMCTrainingRecord:
     """Diagnostic record from one VMC optimization step."""
 
     step: int
+    surrogate_loss: float
     energy: float
     local_energy_std: float
     local_energy_stderr: float
@@ -125,22 +126,25 @@ def train_vmc_metropolis(
             potential,
             sample_result.samples,
         )
+        record: VMCTrainingRecord | None = None
+        if step == 1 or step % report_every == 0 or step == n_steps:
+            obs = vmc_observables(model, potential, sample_result.samples)
+            record = VMCTrainingRecord(
+                step=step,
+                surrogate_loss=float(loss.detach()),
+                energy=obs.local_energy_mean,
+                local_energy_std=obs.local_energy_std,
+                local_energy_stderr=obs.local_energy_stderr,
+                acceptance_rate=sample_result.acceptance_rate,
+                sample_count=obs.sample_count,
+                virial_residual=obs.virial_residual,
+            )
+
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
 
-        if step == 1 or step % report_every == 0 or step == n_steps:
-            obs = vmc_observables(model, potential, sample_result.samples)
-            history.append(
-                VMCTrainingRecord(
-                    step=step,
-                    energy=obs.local_energy_mean,
-                    local_energy_std=obs.local_energy_std,
-                    local_energy_stderr=obs.local_energy_stderr,
-                    acceptance_rate=sample_result.acceptance_rate,
-                    sample_count=obs.sample_count,
-                    virial_residual=obs.virial_residual,
-                )
-            )
+        if record is not None:
+            history.append(record)
 
     return history

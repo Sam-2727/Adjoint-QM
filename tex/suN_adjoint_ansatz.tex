@@ -1,0 +1,1657 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsfonts,amsthm,mathtools,bm}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{microtype}
+\usepackage{listings}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  citecolor=blue!60!black,
+  urlcolor=blue!60!black
+}
+
+\lstset{
+  basicstyle=\ttfamily\small,
+  columns=fullflexible,
+  keepspaces=true,
+  breaklines=true,
+  frame=single,
+  framerule=0.2pt,
+  rulecolor=\color{black!30},
+  xleftmargin=1em,
+  xrightmargin=1em
+}
+
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\su}{\mathfrak{su}}
+\newcommand{\dd}{\,\mathrm d}
+\newcommand{\ii}{\mathrm i}
+\newcommand{\R}{\mathbb R}
+\newcommand{\C}{\mathbb C}
+\newcommand{\one}{\mathbf 1}
+\newcommand{\E}{\mathbb E}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\softplus}{\operatorname{softplus}}
+\newcommand{\sgn}{\operatorname{sgn}}
+\newcommand{\Id}{\operatorname{Id}}
+\newcommand{\calH}{\mathcal H}
+\newcommand{\calE}{\mathcal E}
+\newcommand{\calA}{\mathcal A}
+\newcommand{\calD}{\mathcal D}
+\newcommand{\calN}{\mathcal N}
+\newcommand{\calT}{\mathcal T}
+\newcommand{\gradT}{\nabla_{\!T}}
+\newcommand{\projT}{\Pi_T}
+\newcommand{\veclambda}{\bm\lambda}
+\newcommand{\vzero}{\bm 0}
+\newcommand{\eps}{\varepsilon}
+
+\title{A symmetry-exact variational ansatz for the adjoint-sector ground state of one-matrix $SU(N)$ quantum mechanics}
+\author{Prepared for numerical implementation}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+This document gives a self-contained and implementation-ready proposal for computing the ground-state wavefunction in the adjoint sector of the one-matrix $SU(N)$ Hamiltonian
+\begin{equation}
+H=\frac12 \Tr P^2+\frac12\omega^2\Tr X^2+g\Tr X^4,
+\qquad X,P\in \su(N),\qquad g\geq 0.
+\end{equation}
+The central idea is not to approximate a generic $(N^2-1)$-component function on matrix space.  Instead, one uses the exact structure forced by conjugation covariance.  An adjoint-sector wavefunction can be represented as a traceless matrix-valued equivariant function
+\begin{equation}
+\Psi(VXV^\dagger)=V\Psi(X)V^\dagger.
+\end{equation}
+After diagonalizing $X=U\Lambda U^\dagger$, this reduces to a diagonal spectral color profile
+\begin{equation}
+\Psi(X)=U\diag(q_1(\bm\lambda),\ldots,q_N(\bm\lambda))U^\dagger,
+\qquad \sum_i q_i=0,
+\end{equation}
+where the $q_i$ obey a simple Weyl permutation rule.  The exact Rayleigh quotient becomes an eigenvalue Monte Carlo problem with a known angular kinetic term
+\begin{equation}
+\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}.
+\end{equation}
+The resulting ansatz is an ``adjoint spectral impurity'' living on top of a singlet eigenvalue fluid.  The document defines all symbols, gives the exact energy functional, describes neural and non-neural parameterizations, explains how to use a normalizing flow safely, and supplies pseudocode for computer implementation.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Problem statement and conventions}
+
+\subsection{Hamiltonian}
+
+We study a single Hermitian traceless matrix degree of freedom.  Throughout this document,
+\begin{equation}
+X=X^\dagger,\qquad \Tr X=0,
+\end{equation}
+and similarly for $P$.  This is the physicists' Hermitian realization of the Lie algebra $\su(N)$.
+Choose a Hermitian traceless basis $\{T^a\}_{a=1}^{N^2-1}$ satisfying
+\begin{equation}
+\Tr(T^aT^b)=\delta^{ab}.
+\end{equation}
+Then
+\begin{equation}
+X=\sum_{a=1}^{N^2-1}x_aT^a,
+\qquad
+P=\sum_{a=1}^{N^2-1}p_aT^a,
+\qquad
+p_a=-\ii\frac{\partial}{\partial x_a}.
+\end{equation}
+With these conventions,
+\begin{equation}
+\Tr P^2=\sum_{a=1}^{N^2-1}p_a^2,
+\qquad
+\Tr X^2=\sum_{a=1}^{N^2-1}x_a^2.
+\end{equation}
+Therefore the Hamiltonian is
+\begin{equation}
+\boxed{
+H=-\frac12\Delta_X+V(X),
+\qquad
+V(X)=\frac12\omega^2\Tr X^2+g\Tr X^4,
+}
+\label{eq:cartesian_hamiltonian}
+\end{equation}
+where $\Delta_X$ is the flat Laplacian on the real vector space of traceless Hermitian matrices.
+Unless stated otherwise, $\omega>0$ and $g\geq 0$.  If $\omega=0$, the quartic term with $g>0$ is still confining.
+
+\paragraph{Normalization warning.}
+Some physics papers use generators satisfying $\Tr(T^aT^b)=\frac12\delta^{ab}$.  In that convention the coordinate normalization and the kinetic operator differ by factors of $2$.  All formulas below use $\Tr(T^aT^b)=\delta^{ab}$.  If another basis normalization is used, the safest procedure is to rewrite $H$ as $-\frac12\sum_a\partial_{x_a}^2+V$ in orthonormal coordinates and then apply the formulas below.
+
+\subsection{Adjoint-sector wavefunction}
+
+The Hamiltonian is invariant under global conjugation
+\begin{equation}
+X\mapsto VXV^\dagger,
+\qquad V\in SU(N).
+\end{equation}
+The Hilbert space decomposes into irreducible representations of this conjugation action.  The singlet sector consists of scalar wavefunctions satisfying
+\begin{equation}
+\psi(VXV^\dagger)=\psi(X).
+\end{equation}
+The adjoint sector can be represented by a traceless matrix-valued wavefunction
+\begin{equation}
+\Psi(X)\in \su(N),
+\qquad \Tr\Psi(X)=0,
+\end{equation}
+obeying the exact equivariance condition
+\begin{equation}
+\boxed{
+\Psi(VXV^\dagger)=V\Psi(X)V^\dagger.
+}
+\label{eq:equivariance}
+\end{equation}
+Equivalently,
+\begin{equation}
+\Psi(X)=\sum_{a=1}^{N^2-1}\Psi_a(X)T^a,
+\end{equation}
+and the components $\Psi_a$ transform in the adjoint representation.
+
+The inner product between two matrix-valued adjoint wavefunctions is
+\begin{equation}
+\langle \Psi|\Phi\rangle
+=\int_{\su(N)}\dd X\,\Tr\bigl(\Psi(X)^\dagger\Phi(X)\bigr).
+\end{equation}
+For real-valued variational ansatzes, the dagger may be dropped.  The energy is the Rayleigh quotient
+\begin{equation}
+E[\Psi]
+=\frac{\langle \Psi|H|\Psi\rangle}{\langle\Psi|\Psi\rangle}.
+\end{equation}
+
+\subsection{Computational objective}
+
+We want a numerically tractable ansatz for the lowest-energy state in the adjoint sector.  The ansatz should satisfy:
+\begin{enumerate}[label=(\roman*)]
+\item exact $SU(N)$ adjoint covariance;
+\item exact tracelessness;
+\item regularity at eigenvalue coincidences;
+\item compatibility with Monte Carlo sampling at large $N$;
+\item cheap energy evaluation using first derivatives whenever possible;
+\item a harmonic benchmark at $g=0$ with a known exact answer.
+\end{enumerate}
+
+The recommended strategy is to reduce the problem to eigenvalues and to parameterize the remaining adjoint information as a spectral color profile $q_i(\bm\lambda)$.
+
+\section{Spectral reduction of the adjoint sector}
+
+\subsection{Diagonalization and eigenvalue variables}
+
+For a generic traceless Hermitian matrix $X$, write
+\begin{equation}
+X=U\Lambda U^\dagger,
+\qquad
+\Lambda=\diag(\lambda_1,\ldots,\lambda_N),
+\qquad
+\sum_{i=1}^N\lambda_i=0.
+\end{equation}
+The eigenvalue vector is denoted
+\begin{equation}
+\bm\lambda=(\lambda_1,\ldots,\lambda_N)\in \R^N,
+\qquad
+\bm 1\cdot\bm\lambda=0,
+\end{equation}
+where $\bm 1=(1,\ldots,1)$.
+
+The Vandermonde determinant is
+\begin{equation}
+\Delta(\bm\lambda)=\prod_{1\leq i<j\leq N}(\lambda_i-\lambda_j).
+\end{equation}
+The flat matrix measure decomposes as
+\begin{equation}
+\dd X=C_N\,\delta\!\left(\sum_i\lambda_i\right)
+\prod_{i=1}^N\dd\lambda_i\,\Delta(\bm\lambda)^2\,\frac{\dd U}{\dd T},
+\end{equation}
+where $C_N$ is a constant, $\dd U$ is Haar measure on $SU(N)$, and $\dd T$ denotes the redundant maximal-torus measure.  The constant and angular volume cancel in all Rayleigh quotients.
+
+The potential depends only on eigenvalues:
+\begin{equation}
+\boxed{
+V(\bm\lambda)=\frac12\omega^2\sum_{i=1}^N\lambda_i^2+g\sum_{i=1}^N\lambda_i^4.
+}
+\label{eq:eigenvalue_potential}
+\end{equation}
+
+\subsection{Why the adjoint profile is diagonal}
+
+Set $X=\Lambda$ diagonal with nondegenerate eigenvalues.  Any diagonal unitary $D$ with determinant one satisfies
+\begin{equation}
+D\Lambda D^\dagger=\Lambda.
+\end{equation}
+Equivariance, Eq.~\eqref{eq:equivariance}, implies
+\begin{equation}
+\Psi(\Lambda)=D\Psi(\Lambda)D^\dagger
+\end{equation}
+for all such $D$.  Therefore $\Psi(\Lambda)$ commutes with every diagonal unitary and must itself be diagonal.  Thus
+\begin{equation}
+\Psi(\Lambda)=Q(\bm\lambda),
+\qquad
+Q(\bm\lambda)=\diag(q_1(\bm\lambda),\ldots,q_N(\bm\lambda)).
+\end{equation}
+Tracelessness gives
+\begin{equation}
+\boxed{
+\sum_{i=1}^N q_i(\bm\lambda)=0.
+}
+\label{eq:traceless_q}
+\end{equation}
+For a general matrix $X=U\Lambda U^\dagger$,
+\begin{equation}
+\boxed{
+\Psi(X)=UQ(\bm\lambda)U^\dagger.
+}
+\label{eq:spectral_adjoint_form}
+\end{equation}
+
+\subsection{Weyl covariance}
+
+The diagonalization is not unique.  If $\sigma$ is a permutation matrix, then
+\begin{equation}
+U\Lambda U^\dagger=(U\sigma^\dagger)(\sigma\Lambda\sigma^\dagger)(U\sigma^\dagger)^\dagger.
+\end{equation}
+For $\Psi(X)$ to be well defined, the profile must obey
+\begin{equation}
+\boxed{
+q_{\sigma(i)}(\sigma\bm\lambda)=q_i(\bm\lambda),
+}
+\label{eq:weyl_covariance}
+\end{equation}
+where $(\sigma\bm\lambda)_i=\lambda_{\sigma^{-1}(i)}$.
+Equivalently, if the eigenvalues are permuted, the color labels are permuted in the same way.  This is the precise residual symmetry that the numerical ansatz must satisfy.
+
+\subsection{Norm in eigenvalue variables}
+
+Using Eq.~\eqref{eq:spectral_adjoint_form}, the norm is
+\begin{equation}
+\langle \Psi|\Psi\rangle
+\propto
+\int_{\bm 1\cdot\bm\lambda=0}\dd\bm\lambda_T\,
+\Delta(\bm\lambda)^2
+\sum_{i=1}^N |q_i(\bm\lambda)|^2.
+\end{equation}
+Here $\dd\bm\lambda_T$ denotes Euclidean volume on the $(N-1)$-dimensional hyperplane $\bm 1\cdot\bm\lambda=0$.
+
+It is useful to define
+\begin{equation}
+R(\bm\lambda)=\sum_{i=1}^N |q_i(\bm\lambda)|^2.
+\end{equation}
+Then
+\begin{equation}
+\boxed{
+\|\Psi\|^2
+\propto
+\int_{\bm 1\cdot\bm\lambda=0}\dd\bm\lambda_T\,
+\Delta(\bm\lambda)^2R(\bm\lambda).
+}
+\label{eq:norm_reduced}
+\end{equation}
+
+\section{Exact reduced energy functional}
+
+\subsection{Tangent derivatives on the traceless hyperplane}
+
+All eigenvalue functions are defined on
+\begin{equation}
+\calD_T=\left\{\bm\lambda\in\R^N: \sum_i\lambda_i=0\right\}.
+\end{equation}
+Given an extension of a function to a neighborhood of $\calD_T$, its tangent gradient is
+\begin{equation}
+\boxed{
+\gradT f=\projT\nabla_{\bm\lambda}f,
+\qquad
+\projT=I_N-\frac1N\bm 1\bm 1^T.
+}
+\label{eq:tangent_projector}
+\end{equation}
+In components,
+\begin{equation}
+(\gradT f)_k=\frac{\partial f}{\partial\lambda_k}
+-\frac1N\sum_{\ell=1}^N\frac{\partial f}{\partial\lambda_\ell}.
+\end{equation}
+If the implementation always centers the input by replacing $\bm\lambda$ with $\bm\lambda-\bar\lambda\bm 1$, autodifferentiation often produces tangent gradients automatically, but explicitly applying $\projT$ is safer.
+
+For a vector profile $q_i$, define
+\begin{equation}
+\sum_i |\gradT q_i|^2
+=\sum_{i=1}^N\sum_{k=1}^N
+\left[(\gradT q_i)_k\right]^2.
+\end{equation}
+
+\subsection{Dirichlet form}
+
+The kinetic energy expectation can be written without second derivatives:
+\begin{equation}
+\langle\Psi|T|\Psi\rangle
+=\frac12\int\dd X\,\Tr(\nabla_X\Psi^\dagger\cdot\nabla_X\Psi).
+\end{equation}
+After spectral reduction this becomes
+\begin{equation}
+\boxed{
+\calT[q]=
+\int_{\calD_T}\dd\bm\lambda_T\,\Delta^2
+\left[
+\frac12\sum_i |\gradT q_i|^2
++
+\sum_{i<j}\frac{|q_i-q_j|^2}{(\lambda_i-\lambda_j)^2}
+\right].
+}
+\label{eq:kinetic_reduced}
+\end{equation}
+The first term is the radial kinetic energy.  The second term is the angular kinetic energy carried by the adjoint index.  This term is absent in the singlet sector and is the main structure that should be built into the ansatz.
+
+\subsection{Reduced Rayleigh quotient}
+
+For real $q_i$, the exact adjoint-sector energy functional is
+\begin{equation}
+\boxed{
+E[q]=
+\frac{
+\int_{\calD_T}\dd\bm\lambda_T\,\Delta^2
+\left[
+\frac12\sum_i |\gradT q_i|^2
++
+\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}
++
+V(\bm\lambda)\sum_i q_i^2
+\right]
+}{
+\int_{\calD_T}\dd\bm\lambda_T\,\Delta^2\sum_iq_i^2
+}.
+}
+\label{eq:main_energy_functional}
+\end{equation}
+For complex $q_i$, replace all products by Hermitian products, for example
+\begin{equation}
+(q_i-q_j)^2\mapsto |q_i-q_j|^2,
+\qquad
+(\gradT q_i)^2\mapsto |\gradT q_i|^2.
+\end{equation}
+The ground-state energy in the adjoint sector is the minimum of Eq.~\eqref{eq:main_energy_functional} over all smooth Weyl-covariant traceless profiles $q_i$.
+
+\subsection{Monte Carlo local estimator}
+
+Suppose samples are drawn from the probability density
+\begin{equation}
+\rho_q(\bm\lambda)
+=\frac1Z\Delta(\bm\lambda)^2R(\bm\lambda),
+\qquad
+R(\bm\lambda)=\sum_iq_i(\bm\lambda)^2.
+\end{equation}
+Then the energy is the expectation
+\begin{equation}
+\boxed{
+E[q]=\E_{\rho_q}\left[e_q(\bm\lambda)\right],
+}
+\end{equation}
+where
+\begin{equation}
+\boxed{
+ e_q(\bm\lambda)
+=V(\bm\lambda)
++\frac{
+\frac12\sum_i |\gradT q_i|^2
++
+\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}
+}{
+\sum_iq_i^2
+}.
+}
+\label{eq:dirichlet_local_estimator}
+\end{equation}
+This is not the usual second-derivative local energy.  It is a first-derivative Dirichlet estimator.  It is usually much more stable for neural wavefunctions.
+
+\subsection{Euler-Lagrange equation}
+
+The stationary profiles obey the matrix-valued eigenvalue equation
+\begin{equation}
+\boxed{
+-\frac1{2\Delta^2}\sum_{k=1}^N\partial^T_k
+\left(\Delta^2\partial^T_k q_i\right)
++Vq_i
++\sum_{j\ne i}\frac{q_i-q_j}{(\lambda_i-\lambda_j)^2}
+=Eq_i,
+}
+\label{eq:euler_lagrange}
+\end{equation}
+with
+\begin{equation}
+\partial^T_k=(\projT\nabla_{\bm\lambda})_k.
+\end{equation}
+Equation~\eqref{eq:euler_lagrange} is useful for diagnostics, but Eq.~\eqref{eq:main_energy_functional} is preferred for variational Monte Carlo because it avoids second derivatives.
+
+\section{Core variational ansatz}
+
+\subsection{Scalar amplitude times adjoint fiber}
+
+Use
+\begin{equation}
+\boxed{
+q_i(\bm\lambda)=\exp\!\left[-\frac12S_\theta(\bm\lambda)\right]a_{\eta,i}(\bm\lambda).
+}
+\label{eq:q_expS_a}
+\end{equation}
+Here:
+\begin{itemize}
+\item $S_\theta(\bm\lambda)$ is a real, symmetric scalar function.  It controls the singlet-like radial envelope.
+\item $a_{\eta,i}(\bm\lambda)$ is a real, Weyl-covariant, traceless adjoint fiber profile.
+\item $\theta$ and $\eta$ are variational parameters.
+\end{itemize}
+The conditions are
+\begin{equation}
+S_\theta(\sigma\bm\lambda)=S_\theta(\bm\lambda),
+\end{equation}
+\begin{equation}
+a_{\eta,\sigma(i)}(\sigma\bm\lambda)=a_{\eta,i}(\bm\lambda),
+\qquad
+\sum_i a_{\eta,i}(\bm\lambda)=0.
+\end{equation}
+Then $q_i$ automatically satisfies the required adjoint-sector constraints.
+
+The matrix wavefunction is
+\begin{equation}
+\boxed{
+\Psi_{\theta,\eta}(X)
+=U\diag\!\left(
+\exp[-S_\theta(\bm\lambda)/2]a_{\eta,1}(\bm\lambda),
+\ldots,
+\exp[-S_\theta(\bm\lambda)/2]a_{\eta,N}(\bm\lambda)
+\right)U^\dagger.
+}
+\label{eq:matrix_wavefunction_spectral}
+\end{equation}
+No neural network ever needs to see the angular matrix $U$ unless one wants to evaluate $\Psi(X)$ explicitly.  The energy can be evaluated entirely from $\bm\lambda$.
+
+\subsection{Moment variables}
+
+Define normalized moments
+\begin{equation}
+ m_k(\bm\lambda)=\frac1N\sum_{i=1}^N\lambda_i^k,
+ \qquad k=2,3,\ldots,M.
+\end{equation}
+The first moment is absent because $m_1=0$ in $\su(N)$.  The moments are symmetric under permutations and therefore are suitable inputs for scalar networks and coefficient networks.
+
+For numerical conditioning, define a scale $L>0$ and dimensionless eigenvalues
+\begin{equation}
+ t_i=\frac{\lambda_i}{L}.
+\end{equation}
+Practical choices for $L$ include:
+\begin{enumerate}[label=(\alph*)]
+\item a fixed physical scale, for example $L=\sqrt{N/\omega}$ when $g$ is small;
+\item a running Monte Carlo estimate $L^2=m_2$ averaged over recent samples;
+\item a learnable positive parameter $L=\softplus(\ell)+L_{\min}$.
+\end{enumerate}
+When using Chebyshev polynomials, one typically wants most $t_i$ to lie in $[-1,1]$.
+
+\subsection{Recommended scalar envelope $S_\theta$}
+
+A robust scalar envelope has an analytic confining tail plus a flexible symmetric correction:
+\begin{equation}
+\boxed{
+S_\theta(\bm\lambda)
+=\alpha_2\sum_i\lambda_i^2
++\alpha_3\sum_i(\lambda_i^2+\eps^2)^{3/2}
++\widetilde S_\theta(m_2,m_3,\ldots,m_M).
+}
+\label{eq:S_theta_recommended}
+\end{equation}
+Here
+\begin{equation}
+\alpha_2=\softplus(\tilde\alpha_2)\geq0,
+\qquad
+\alpha_3=\softplus(\tilde\alpha_3)\geq0,
+\end{equation}
+and $\eps$ is a small smoothing parameter, for example $\eps=10^{-6}$ in double precision or $\eps=10^{-4}$ in single precision.
+
+The term $\alpha_2\sum_i\lambda_i^2$ captures the exact harmonic Gaussian envelope.  The term $\alpha_3\sum_i(\lambda_i^2+\eps^2)^{3/2}$ captures the approximate WKB tail for a quartic potential.  The correction $\widetilde S_\theta$ can be:
+\begin{equation}
+\widetilde S_\theta=N\,\mathrm{MLP}_\theta(m_2,m_3,\ldots,m_M),
+\end{equation}
+or a low-order trace polynomial,
+\begin{equation}
+\widetilde S_\theta=\sum_{k=2}^{M_S}b_k\sum_i\lambda_i^k
++\sum_{k,\ell}b_{k\ell}\left(\sum_i\lambda_i^k\right)
+\left(\sum_j\lambda_j^\ell\right).
+\end{equation}
+For an even-parity scalar envelope, include only even total powers or feed only even moments into the MLP.
+
+\subsection{Recommended adjoint head: Chebyshev spectral impurity}
+
+Let $T_k(t)$ be the Chebyshev polynomial of the first kind:
+\begin{equation}
+T_k(\cos\phi)=\cos(k\phi).
+\end{equation}
+Define centered Chebyshev features
+\begin{equation}
+\boxed{
+B_{k,i}(\bm\lambda)
+=T_k(t_i)-\frac1N\sum_{j=1}^N T_k(t_j),
+\qquad t_i=\lambda_i/L.
+}
+\label{eq:centered_chebyshev_feature}
+\end{equation}
+Then
+\begin{equation}
+\sum_iB_{k,i}=0,
+\end{equation}
+and
+\begin{equation}
+B_{k,\sigma(i)}(\sigma\bm\lambda)=B_{k,i}(\bm\lambda).
+\end{equation}
+The adjoint head is
+\begin{equation}
+\boxed{
+ a_{\eta,i}(\bm\lambda)=\sum_{k=1}^K c_k(\bm m;\eta)B_{k,i}(\bm\lambda),
+}
+\label{eq:chebyshev_adjoint_head}
+\end{equation}
+where
+\begin{equation}
+\bm m=(m_2,m_3,\ldots,m_M).
+\end{equation}
+The coefficients $c_k$ may be constants, or they may be outputs of a small MLP:
+\begin{equation}
+(c_1,\ldots,c_K)=\mathrm{MLP}_\eta(\bm m).
+\end{equation}
+
+This ansatz is collision-regular.  For $\lambda_i\approx\lambda_j$,
+\begin{equation}
+B_{k,i}-B_{k,j}=T_k(\lambda_i/L)-T_k(\lambda_j/L)
+=\frac1L T_k'(\xi_{ij})(\lambda_i-\lambda_j).
+\end{equation}
+After the mean terms cancel.  Therefore
+\begin{equation}
+\frac{a_i-a_j}{\lambda_i-\lambda_j}
+\end{equation}
+remains finite at eigenvalue coincidences.
+
+\subsection{Alternative adjoint head: pointwise DeepSets form}
+
+Another flexible option is
+\begin{equation}
+\boxed{
+ h_i=h_\eta(\lambda_i;m_2,m_3,\ldots,m_M),
+\qquad
+ a_i=h_i-\frac1N\sum_{j=1}^Nh_j.
+}
+\label{eq:pointwise_deepset_head}
+\end{equation}
+The same scalar function $h_\eta$ is applied to every eigenvalue.  The subtraction enforces tracelessness.  Weyl covariance is automatic.
+
+To enforce odd parity under $X\mapsto -X$, use
+\begin{equation}
+ h_\eta(\lambda_i;m_2,m_4,\ldots)
+ =\lambda_i\,\widetilde h_\eta(\lambda_i^2;m_2,m_4,
+\ldots).
+\end{equation}
+To allow both parities, use the unrestricted form in Eq.~\eqref{eq:pointwise_deepset_head} and later compare optimized energies in the even and odd subspaces.
+
+\subsection{Normalized fiber version}
+
+Sometimes it is numerically useful to separate the magnitude and direction of the adjoint fiber:
+\begin{equation}
+q_i(\bm\lambda)=r_\theta(\bm\lambda)n_{\eta,i}(\bm\lambda),
+\end{equation}
+with
+\begin{equation}
+\sum_i n_{\eta,i}=0,
+\qquad
+\sum_i n_{\eta,i}^2=1.
+\end{equation}
+Given an unnormalized traceless head $a_i$, define
+\begin{equation}
+\boxed{
+ n_i=\frac{a_i}{\sqrt{\sum_j a_j^2+\eps_n}},
+}
+\label{eq:normalized_fiber}
+\end{equation}
+where $\eps_n$ is a small positive number.  If $\eps_n=0$ and $a\neq0$, then $\sum_i n_i^2=1$ exactly.
+
+For this form, the sampling density is
+\begin{equation}
+\pi_\theta(\bm\lambda)
+\propto \Delta(\bm\lambda)^2r_\theta(\bm\lambda)^2.
+\end{equation}
+The energy estimator becomes
+\begin{equation}
+\boxed{
+E_{\theta,\eta}
+=\E_{\pi_\theta}\left[
+V
++\frac12|\gradT\log r_\theta|^2
++\frac12\sum_i|\gradT n_i|^2
++\sum_{i<j}\frac{(n_i-n_j)^2}{(\lambda_i-\lambda_j)^2}
+\right].
+}
+\label{eq:rn_energy}
+\end{equation}
+This form is especially natural if a normalizing flow is used to represent $\pi_\theta$.
+
+\subsection{Matrix-polynomial form}
+
+The Chebyshev ansatz can be written directly in matrix language.  Define the traceless projection
+\begin{equation}
+\widehat A=A-\frac1N\Tr(A)\one.
+\end{equation}
+Then
+\begin{equation}
+\boxed{
+\Psi_{\theta,\eta}(X)
+=\exp[-S_\theta(\Tr X^2,\ldots,\Tr X^M)/2]
+\sum_{k=1}^K c_k(\bm m;\eta)\,
+\widehat{T_k(X/L)}.
+}
+\label{eq:matrix_polynomial_ansatz}
+\end{equation}
+This form makes adjoint covariance manifest:
+\begin{equation}
+\widehat{T_k(VXV^\dagger/L)}=V\widehat{T_k(X/L)}V^\dagger,
+\end{equation}
+while $S_\theta$ and $c_k$ are invariant scalar functions of traces.
+
+Because of the Cayley-Hamilton theorem, matrix powers above degree $N-1$ are linearly dependent over the ring of invariant trace functions.  Thus $K\leq N-1$ is enough for an exact polynomial basis if arbitrary trace-dependent coefficients are allowed.  In practice, a larger Chebyshev truncation can still be useful as a numerical representation on sampled spectra, but one should monitor conditioning.
+
+\section{Harmonic benchmark}
+
+For $g=0$, the problem is an isotropic harmonic oscillator in
+\begin{equation}
+d=N^2-1
+\end{equation}
+real dimensions.  The singlet ground state is
+\begin{equation}
+\psi_0(X)=\exp\left[-\frac\omega2\Tr X^2\right],
+\qquad
+E_0=\frac\omega2(N^2-1).
+\end{equation}
+The lowest adjoint state is obtained by multiplying by one matrix coordinate:
+\begin{equation}
+\boxed{
+\Psi_{\mathrm{adj},0}(X)=X\exp\left[-\frac\omega2\Tr X^2\right].
+}
+\label{eq:harmonic_adjoint_exact}
+\end{equation}
+It transforms in the adjoint representation and has energy
+\begin{equation}
+\boxed{
+E_{\mathrm{adj},0}(g=0)=\frac\omega2(N^2-1)+\omega.
+}
+\label{eq:harmonic_adjoint_energy}
+\end{equation}
+In spectral variables,
+\begin{equation}
+q_i(\bm\lambda)=\lambda_i\exp\left[-\frac\omega2\sum_j\lambda_j^2\right].
+\end{equation}
+Therefore a correct implementation should reproduce Eq.~\eqref{eq:harmonic_adjoint_energy} with
+\begin{equation}
+S_\theta=\omega\sum_i\lambda_i^2,
+\qquad
+ a_i=\lambda_i.
+\end{equation}
+This is the most important unit test.
+
+\section{Sampling strategies}
+
+\subsection{Direct MCMC target}
+
+For the ansatz $q_i=e^{-S/2}a_i$, the probability density for energy estimation is
+\begin{equation}
+\boxed{
+\rho_{\theta,\eta}(\bm\lambda)
+\propto
+\Delta(\bm\lambda)^2
+\exp[-S_\theta(\bm\lambda)]
+A_\eta(\bm\lambda),
+\qquad
+A_\eta=\sum_i a_{\eta,i}^2.
+}
+\label{eq:mcmc_target}
+\end{equation}
+The log target, up to an additive constant, is
+\begin{equation}
+\boxed{
+\log\rho_{\theta,\eta}
+=2\sum_{i<j}\log|\lambda_i-\lambda_j|
+-S_\theta(\bm\lambda)
++\log A_\eta(\bm\lambda).
+}
+\label{eq:log_target}
+\end{equation}
+All operations should be performed on the traceless hyperplane.  A convenient implementation uses an orthonormal matrix $B\in\R^{N\times(N-1)}$ satisfying
+\begin{equation}
+B^TB=I_{N-1},
+\qquad
+B^T\bm1=0.
+\end{equation}
+Then represent
+\begin{equation}
+\bm\lambda=B\bm z,
+\qquad
+\bm z\in\R^{N-1},
+\end{equation}
+run HMC, MALA, or random-walk Metropolis in $\bm z$, and compute all model quantities from $\bm\lambda$.
+
+\paragraph{MALA proposal.}
+For example, with step size $\delta$,
+\begin{equation}
+\bm z' = \bm z+\frac{\delta^2}{2}\nabla_z\log\rho(B\bm z)+\delta\bm\xi,
+\qquad
+\bm\xi\sim\calN(0,I_{N-1}).
+\end{equation}
+Accept or reject with the usual Metropolis-Hastings correction.
+
+\paragraph{HMC.}
+For HMC, define
+\begin{equation}
+U_{\mathrm{HMC}}(\bm z)=-\log\rho(B\bm z),
+\end{equation}
+introduce momentum $\bm p\sim\calN(0,I_{N-1})$, and integrate Hamilton's equations using leapfrog.  HMC is usually preferable at larger $N$ because the Vandermonde repulsion creates strong correlations.
+
+\subsection{Normalizing flow on the Weyl chamber}
+
+A normalizing flow can be used either as a variational density or as an independent proposal distribution.  For eigenvalues it is best to work in one ordered Weyl chamber,
+\begin{equation}
+\lambda_1<\lambda_2<\cdots<\lambda_N,
+\qquad
+\sum_i\lambda_i=0.
+\end{equation}
+Define positive nearest-neighbor gaps
+\begin{equation}
+d_r=\lambda_{r+1}-\lambda_r>0,
+\qquad r=1,\ldots,N-1.
+\end{equation}
+Given gaps $d_r$, set
+\begin{equation}
+y_1=0,
+\qquad
+y_i=\sum_{r=1}^{i-1}d_r\quad (i=2,\ldots,N),
+\end{equation}
+then center
+\begin{equation}
+\lambda_i=y_i-\frac1N\sum_{j=1}^Ny_j.
+\end{equation}
+The Euclidean hyperplane volume satisfies
+\begin{equation}
+\boxed{
+\dd\bm\lambda_T=N^{-1/2}\prod_{r=1}^{N-1}\dd d_r.
+}
+\label{eq:gap_jacobian_d}
+\end{equation}
+If $s_r=\log d_r$, then
+\begin{equation}
+\dd\bm\lambda_T=N^{-1/2}\exp\left(\sum_{r=1}^{N-1}s_r\right)\prod_r\dd s_r.
+\end{equation}
+Let $s=F_\phi(z)$ be an invertible flow from a base variable $z\sim p_0(z)$ to gap-log variables $s$.  The density with respect to $\dd\bm\lambda_T$ is
+\begin{equation}
+\boxed{
+\log q_\phi(\bm\lambda)
+=\log p_0(z)-\log\left|\det\frac{\partial F_\phi}{\partial z}\right|
++\frac12\log N-
+\sum_{r=1}^{N-1}s_r.
+}
+\label{eq:flow_density_gap}
+\end{equation}
+The additive constant $\frac12\log N$ cancels in energy gradients but is included for completeness.
+
+\subsection{Safe use of a flow as a variational density}
+
+If the normalized fiber representation $q_i=r n_i$ is used, and a flow directly represents
+\begin{equation}
+\pi_\phi(\bm\lambda)=q_\phi(\bm\lambda),
+\end{equation}
+then
+\begin{equation}
+r_\phi(\bm\lambda)^2\propto\frac{q_\phi(\bm\lambda)}{\Delta(\bm\lambda)^2}.
+\end{equation}
+Consequently,
+\begin{equation}
+\gradT\log r_\phi
+=\frac12\gradT\left[\log q_\phi-2\log|\Delta|\right].
+\end{equation}
+The energy estimator becomes
+\begin{equation}
+\boxed{
+ e_{\phi,\eta}(\bm\lambda)
+=V
++\frac18\left|\gradT\left(\log q_\phi-2\log|\Delta|\right)\right|^2
++\frac12\sum_i|\gradT n_i|^2
++\sum_{i<j}\frac{(n_i-n_j)^2}{(\lambda_i-\lambda_j)^2}.
+}
+\label{eq:flow_energy_estimator}
+\end{equation}
+Then
+\begin{equation}
+E_{\phi,\eta}=\E_{\bm\lambda\sim q_\phi}[e_{\phi,\eta}(\bm\lambda)].
+\end{equation}
+If the flow is reparameterized, one may differentiate this Monte Carlo average pathwise.
+
+However, the flow density must vanish near eigenvalue coincidences like $\Delta^2$; otherwise $\log q_\phi-2\log|\Delta|$ has singular derivatives and the kinetic energy diverges.  The safest option is therefore not to ask a generic flow to discover the boundary behavior.  Instead use one of the following:
+\begin{enumerate}[label=(\alph*)]
+\item Factor the Vandermonde explicitly and sample
+\begin{equation}
+\pi_\theta\propto\Delta^2e^{-S_\theta}
+\end{equation}
+by MCMC.
+\item Train a flow only as a proposal distribution for the known unnormalized density.
+\item Build the flow in gap variables with base densities and boundary transformations chosen so that $q_\phi\sim\Delta^2$ whenever adjacent gaps vanish.
+\end{enumerate}
+The first two options are usually simpler and more robust.
+
+\subsection{Flow as a proposal distribution}
+
+Let $q_{\mathrm{prop}}(\bm\lambda)$ be any normalized proposal density on the hyperplane or Weyl chamber.  The Rayleigh quotient can be estimated by importance sampling:
+\begin{equation}
+E[q]
+=\frac{
+\E_{q_{\mathrm{prop}}}\left[w(\bm\lambda) e_q(\bm\lambda)\right]
+}{
+\E_{q_{\mathrm{prop}}}\left[w(\bm\lambda)\right]
+},
+\end{equation}
+where
+\begin{equation}
+\boxed{
+ w(\bm\lambda)=
+\frac{\Delta(\bm\lambda)^2R(\bm\lambda)}{q_{\mathrm{prop}}(\bm\lambda)}.
+}
+\label{eq:importance_weight}
+\end{equation}
+If the proposal is trained to approximate $\Delta^2R$, the weights have low variance.  This separates the representation of the wavefunction from the engineering problem of generating independent samples.
+
+\section{Optimization}
+
+\subsection{Direct fixed-proposal Rayleigh loss}
+
+The cleanest differentiable loss is obtained by sampling from a fixed proposal distribution during each optimizer step.  Given samples $\{\bm\lambda^{(b)}\}_{b=1}^B$ from $q_{\mathrm{prop}}$, define
+\begin{equation}
+F_{\theta,\eta}(\bm\lambda)
+=\frac12\sum_i|\gradT q_{\theta,\eta,i}|^2
++\sum_{i<j}\frac{(q_{\theta,\eta,i}-q_{\theta,\eta,j})^2}{(\lambda_i-\lambda_j)^2}
++V\sum_iq_{\theta,\eta,i}^2,
+\end{equation}
+\begin{equation}
+R_{\theta,\eta}(\bm\lambda)=\sum_iq_{\theta,\eta,i}^2,
+\end{equation}
+\begin{equation}
+W_{\theta,\eta}(\bm\lambda)=\frac{\Delta^2R_{\theta,\eta}(\bm\lambda)}{q_{\mathrm{prop}}(\bm\lambda)}.
+\end{equation}
+The Monte Carlo Rayleigh loss is
+\begin{equation}
+\boxed{
+\widehat E_{\theta,\eta}
+=\frac{\sum_{b=1}^B W_b\,F_b/R_b}{\sum_{b=1}^B W_b}
+=\frac{\sum_{b=1}^B \Delta_b^2F_b/q_{\mathrm{prop},b}}{\sum_{b=1}^B \Delta_b^2R_b/q_{\mathrm{prop},b}}.
+}
+\label{eq:fixed_proposal_loss}
+\end{equation}
+Because the samples are from a parameter-independent proposal, autodifferentiating Eq.~\eqref{eq:fixed_proposal_loss} gives the correct gradient of the sampled Rayleigh quotient.
+
+A practical version uses a lagged proposal: at iteration $t$, draw samples from an MCMC chain or flow approximating $\rho_{\theta_t,\eta_t}$, but optimize Eq.~\eqref{eq:fixed_proposal_loss} for a few small parameter updates while treating the proposal as fixed.  Refresh the proposal often.
+
+\subsection{Stochastic reconfiguration / natural gradient}
+
+For wavefunction parameters $\alpha_\mu$, define score functions
+\begin{equation}
+O_\mu(\bm\lambda)
+=\frac12\frac{\partial}{\partial\alpha_\mu}\log R_{\alpha}(\bm\lambda).
+\end{equation}
+The stochastic reconfiguration matrix is
+\begin{equation}
+S_{\mu\nu}^{\mathrm{SR}}
+=\Cov_{\rho_\alpha}(O_\mu,O_\nu).
+\end{equation}
+A natural-gradient update solves
+\begin{equation}
+\left(S^{\mathrm{SR}}+\epsilon_{\mathrm{diag}}I\right)\delta\alpha=-\tau g,
+\end{equation}
+where $g_\mu=\partial E/\partial\alpha_\mu$ is the energy gradient, $\tau$ is a learning-rate parameter, and $\epsilon_{\mathrm{diag}}$ is a small diagonal stabilizer.  For large neural networks, use conjugate gradients and compute matrix-vector products with automatic differentiation.
+
+For a first implementation, Adam on Eq.~\eqref{eq:fixed_proposal_loss} is usually easier.  Stochastic reconfiguration becomes useful after the ansatz has reached a reasonable energy and optimization becomes ill-conditioned.
+
+\subsection{Implementation-level VMC loop}
+
+A minimal loop is:
+
+\begin{lstlisting}
+initialize theta, eta
+initialize sampler for proposal q_prop
+
+for outer_step in range(num_outer_steps):
+    # 1. Generate a batch of eigenvalue samples.
+    #    Use HMC/MALA for rho_{theta,eta}, or a trained flow proposal.
+    lambda_batch, log_q_prop = sampler.sample(batch_size)
+
+    # 2. For several gradient steps, treat this proposal batch as fixed.
+    for inner_step in range(num_inner_steps):
+        q = adjoint_profile(lambda_batch, theta, eta)       # shape [B,N]
+        R = sum_i q_i^2                                    # shape [B]
+        V = 0.5*omega**2*sum_i lambda_i^2 + g*sum_i lambda_i^4
+        radial = 0.5*sum_{i,k} (projected_dq_i_dlambda_k)^2
+        angular = sum_{i<j} ((q_i-q_j)/(lambda_i-lambda_j))^2
+        F = radial + angular + V*R
+        log_delta2 = 2*sum_{i<j} log(abs(lambda_i-lambda_j))
+        log_weight = log_delta2 - log_q_prop
+        numerator = mean(exp(log_weight) * F)
+        denominator = mean(exp(log_weight) * R)
+        loss = numerator / denominator
+        take optimizer step on theta, eta
+
+    # 3. Refresh or retune the sampler to the new parameters.
+    sampler.update_target(theta, eta)
+\end{lstlisting}
+
+If the proposal is exactly $\rho_{\theta,\eta}$ at the current parameters, then the weights simplify during measurement.  For optimization, however, keeping the proposal fixed for the differentiated loss avoids missing score terms.
+
+\section{Singlet-preconditioned adjoint impurity method}
+
+\subsection{Motivation}
+
+The adjoint state is often well described as an adjoint ``impurity'' on top of the singlet eigenvalue fluid.  This suggests the factorization
+\begin{equation}
+q_i(\bm\lambda)=\Phi_0(\bm\lambda)f_i(\bm\lambda),
+\end{equation}
+where $\Phi_0$ is an optimized singlet ground-state wavefunction and $f_i$ carries the adjoint index.
+
+This produces a powerful non-neural or semi-neural method:
+\begin{enumerate}[label=(\roman*)]
+\item learn or compute the singlet density once;
+\item solve a linear generalized eigenvalue problem for the adjoint impurity.
+\end{enumerate}
+
+\subsection{Singlet ground state}
+
+A singlet wavefunction has the form
+\begin{equation}
+\psi_0(X)=\Phi_0(\bm\lambda)=\exp[-S_0(\bm\lambda)/2],
+\end{equation}
+where $S_0$ is symmetric.  The singlet energy is
+\begin{equation}
+E_0[S_0]
+=\frac{
+\int\dd\bm\lambda_T\Delta^2
+\left[\frac12|\gradT\Phi_0|^2+V\Phi_0^2\right]
+}{
+\int\dd\bm\lambda_T\Delta^2\Phi_0^2
+}.
+\end{equation}
+Equivalently, sampling from
+\begin{equation}
+\rho_0\propto\Delta^2e^{-S_0},
+\end{equation}
+one obtains
+\begin{equation}
+E_0[S_0]=\E_{\rho_0}\left[V+\frac18|\gradT S_0|^2\right].
+\end{equation}
+This expression is a first-derivative Dirichlet estimator for the singlet sector.
+
+\subsection{Adjoint impurity if the singlet is exact}
+
+If $\Phi_0$ is the exact singlet ground state with energy $E_0$, then
+\begin{equation}
+\boxed{
+E_{\mathrm{adj}}[f]
+=E_0+
+\frac{
+\int\dd\bm\lambda_T\Delta^2\Phi_0^2
+\left[\frac12\sum_i|\gradT f_i|^2
++\sum_{i<j}\frac{(f_i-f_j)^2}{(\lambda_i-\lambda_j)^2}
+\right]
+}{
+\int\dd\bm\lambda_T\Delta^2\Phi_0^2\sum_if_i^2
+}.
+}
+\label{eq:exact_singlet_impurity_energy}
+\end{equation}
+Thus the adjoint excitation energy above the singlet is determined by a positive impurity kinetic operator.
+
+\subsection{Linear basis and generalized eigenproblem}
+
+Choose traceless Weyl-covariant basis functions $A_i^{(\alpha)}(\bm\lambda)$, $\alpha=1,\ldots,P$, and write
+\begin{equation}
+f_i(\bm\lambda)=\sum_{\alpha=1}^Pc_\alpha A_i^{(\alpha)}(\bm\lambda).
+\end{equation}
+A good default basis is
+\begin{equation}
+A_i^{(k)}=B_{k,i}
+=T_k(\lambda_i/L)-\frac1N\sum_jT_k(\lambda_j/L),
+\qquad k=1,\ldots,K.
+\end{equation}
+One may also include moment-dressed basis functions,
+\begin{equation}
+A_i^{(k,r)}=m_rB_{k,i},
+\qquad r=2,\ldots,M.
+\end{equation}
+
+Define the overlap matrix
+\begin{equation}
+\boxed{
+S_{\alpha\beta}
+=\left\langle \sum_iA_i^{(\alpha)}A_i^{(\beta)}\right\rangle_{\rho_0}.
+}
+\label{eq:impurity_overlap}
+\end{equation}
+Define the impurity kinetic matrix
+\begin{equation}
+\boxed{
+K_{\alpha\beta}
+=\left\langle
+\frac12\sum_i\gradT A_i^{(\alpha)}\cdot\gradT A_i^{(\beta)}
++
+\sum_{i<j}
+\frac{(A_i^{(\alpha)}-A_j^{(\alpha)})(A_i^{(\beta)}-A_j^{(\beta)})}{(\lambda_i-\lambda_j)^2}
+\right\rangle_{\rho_0}.
+}
+\label{eq:impurity_kinetic}
+\end{equation}
+Then solve
+\begin{equation}
+\boxed{
+Kc=\Delta E\,Sc.
+}
+\label{eq:generalized_eigen_impurity}
+\end{equation}
+The lowest eigenvalue gives the adjoint excitation energy $\Delta E$, and
+\begin{equation}
+E_{\mathrm{adj}}=E_0+\Delta E.
+\end{equation}
+The corresponding eigenvector gives the variational impurity profile.
+
+\subsection{If the singlet is approximate}
+
+If $\Phi_0=e^{-S_0/2}$ is approximate, Eq.~\eqref{eq:exact_singlet_impurity_energy} is no longer exact.  The fully correct linear variational matrices are obtained by inserting
+\begin{equation}
+q_i=e^{-S_0/2}f_i.
+\end{equation}
+after Eq.~\eqref{eq:main_energy_functional}.  Sampling from
+\begin{equation}
+\rho_0\propto\Delta^2e^{-S_0},
+\end{equation}
+and using the same basis $f_i=\sum c_\alpha A_i^{(\alpha)}$, define
+\begin{equation}
+S_{\alpha\beta}
+=\left\langle\sum_iA_i^{(\alpha)}A_i^{(\beta)}\right\rangle_{\rho_0},
+\end{equation}
+\begin{align}
+H_{\alpha\beta}
+=\Bigg\langle&
+\frac12\sum_i
+\left(\gradT A_i^{(\alpha)}-\frac12A_i^{(\alpha)}\gradT S_0\right)
+\cdot
+\left(\gradT A_i^{(\beta)}-\frac12A_i^{(\beta)}\gradT S_0\right)
+\nonumber\\
+&+
+\sum_{i<j}
+\frac{(A_i^{(\alpha)}-A_j^{(\alpha)})(A_i^{(\beta)}-A_j^{(\beta)})}{(\lambda_i-\lambda_j)^2}
++V\sum_iA_i^{(\alpha)}A_i^{(\beta)}
+\Bigg\rangle_{\rho_0}.
+\label{eq:approx_singlet_H_matrix}
+\end{align}
+Then solve
+\begin{equation}
+\boxed{
+Hc=ESc.
+}
+\label{eq:approx_singlet_generalized_eigen}
+\end{equation}
+This formula remains a rigorous Rayleigh-Ritz method for the chosen basis and approximate scalar envelope $S_0$.
+
+\subsection{Pseudocode for the generalized eigenmethod}
+
+\begin{lstlisting}
+# Inputs:
+#   samples lambda_batch ~ rho0 proportional to Delta(lambda)^2 exp(-S0(lambda))
+#   basis A_alpha(lambda), alpha=1,...,P, each shape [B,N]
+#   gradients grad_T A_alpha, shape [B,N,N]
+#   optional grad_T S0, shape [B,N]
+
+S = zeros(P,P)
+H = zeros(P,P)
+
+for alpha in range(P):
+  for beta in range(alpha,P):
+    overlap = sum_i A[alpha,i] * A[beta,i]
+
+    if singlet_is_exact:
+        radial = 0.5 * sum_{i,k} gradA[alpha,i,k] * gradA[beta,i,k]
+        potential_like = 0
+    else:
+        cov_grad_alpha[i,k] = gradA[alpha,i,k] - 0.5*A[alpha,i]*gradS0[k]
+        cov_grad_beta[i,k]  = gradA[beta,i,k]  - 0.5*A[beta,i]*gradS0[k]
+        radial = 0.5 * sum_{i,k} cov_grad_alpha[i,k]*cov_grad_beta[i,k]
+        potential_like = V * overlap
+
+    angular = sum_{i<j} ((A[alpha,i]-A[alpha,j])
+                         *(A[beta,i]-A[beta,j])
+                         /(lambda_i-lambda_j)**2)
+
+    S[alpha,beta] = mean(overlap)
+    H[alpha,beta] = mean(radial + angular + potential_like)
+    symmetrize entries
+
+# Add small diagonal stabilizer if needed.
+S_reg = S + eps_S * eye(P)
+
+# Solve H c = E S c, or K c = DeltaE S c in the exact-singlet case.
+eigvals, eigvecs = generalized_eigh(H, S_reg)
+select smallest eigval and eigvec
+\end{lstlisting}
+
+This method is often the most reliable large-$N$ route because the nonlinear optimization is confined to the singlet density, while the adjoint sector is solved by a linear spectral problem.
+
+\section{Large-$N$ acceleration}
+
+\subsection{Cost bottleneck}
+
+The angular term
+\begin{equation}
+\calA[q]
+=\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}
+\end{equation}
+costs $O(N^2)$ per sample if evaluated directly.  For large $N$, this can dominate the computation.
+
+\subsection{Polynomial quotient trick}
+
+Suppose
+\begin{equation}
+f_i=f(\lambda_i)-\bar f
+\end{equation}
+with $f$ a polynomial of degree $K$:
+\begin{equation}
+f(x)=\sum_{r=0}^Kc_rx^r.
+\end{equation}
+Then
+\begin{equation}
+\frac{f(\lambda_i)-f(\lambda_j)}{\lambda_i-\lambda_j}
+=\sum_{r=1}^Kc_r\sum_{s=0}^{r-1}\lambda_i^{r-1-s}\lambda_j^s.
+\end{equation}
+Therefore the angular term can be written as a polynomial in power sums
+\begin{equation}
+p_k=\sum_i\lambda_i^k.
+\end{equation}
+For example, if $f(x)=x$, then
+\begin{equation}
+\calA=\sum_{i<j}1=\frac{N(N-1)}2.
+\end{equation}
+If $f(x)=x^2$, then
+\begin{equation}
+\frac{f_i-f_j}{\lambda_i-\lambda_j}=\lambda_i+\lambda_j,
+\end{equation}
+so
+\begin{equation}
+\calA=\sum_{i<j}(\lambda_i+\lambda_j)^2
+=(N-2)p_2+p_1^2=(N-2)p_2,
+\end{equation}
+because $p_1=0$.
+
+For a Chebyshev expansion, convert $T_k(x/L)$ to monomials or use recurrence relations to compute the divided differences.  This reduces the angular cost from $O(N^2K)$ to approximately $O(NK+K^2)$ for polynomial degree $K$.
+
+\subsection{When to use the acceleration}
+
+Use the direct pair loop for:
+\begin{equation}
+N\lesssim 200
+\end{equation}
+if memory permits.  It is simple and robust.  Use the power-sum acceleration when:
+\begin{equation}
+N\gtrsim 500,
+\end{equation}
+or when the basis dimension $K$ is large and many generalized-eigenproblem matrix elements are needed.
+
+\section{Implementation details}
+
+\subsection{Recommended tensor shapes}
+
+For a batch size $B$:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Object & Shape & Meaning \\
+\midrule
+\texttt{lam} & $[B,N]$ & eigenvalues, centered so $\sum_i\lambda_i=0$ \\
+\texttt{q} & $[B,N]$ & adjoint profile $q_i$ \\
+\texttt{a} & $[B,N]$ & unnormalized adjoint head $a_i$ \\
+\texttt{S} & $[B]$ & scalar envelope $S_\theta$ \\
+\texttt{R} & $[B]$ & fiber norm $\sum_iq_i^2$ \\
+\texttt{V} & $[B]$ & potential energy $V(\bm\lambda)$ \\
+\texttt{J} & $[B,N,N]$ & Jacobian $J_{i k}=\partial q_i/\partial\lambda_k$ \\
+\texttt{JT} & $[B,N,N]$ & tangent-projected Jacobian \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Stable core operations}
+
+Centering:
+\begin{lstlisting}
+def center(lam):
+    return lam - lam.mean(axis=-1, keepdims=True)
+\end{lstlisting}
+
+Log Vandermonde squared:
+\begin{lstlisting}
+def log_delta2(lam, eps=0.0):
+    # lam shape [B,N]
+    out = 0.0
+    for i in range(N):
+        for j in range(i+1,N):
+            diff = lam[:,i] - lam[:,j]
+            out = out + 2.0 * log(abs(diff) + eps)
+    return out
+\end{lstlisting}
+For exact calculations one should not add $\eps$ to the Vandermonde.  For neural training, a tiny $\eps$ may prevent catastrophic floating-point exceptions, but final measurements should be performed with $\eps=0$ or with high-precision checks.
+
+Potential:
+\begin{lstlisting}
+def potential(lam, omega, g):
+    return 0.5*omega**2 * sum(lam**2, axis=-1) + g * sum(lam**4, axis=-1)
+\end{lstlisting}
+
+Tangent projection of a gradient-like tensor:
+\begin{lstlisting}
+def project_tangent(v):
+    # v shape [..., N]
+    return v - v.mean(axis=-1, keepdims=True)
+\end{lstlisting}
+
+\subsection{Energy batch from a generic profile}
+
+\begin{lstlisting}
+def energy_terms(lam, params):
+    # lam: [B,N], centered
+    # q: [B,N]
+    q = adjoint_profile(lam, params)
+    R = sum(q**2, axis=-1)                         # [B]
+    V = potential(lam, omega, g)                   # [B]
+
+    # J[b,i,k] = d q_i / d lambda_k.
+    J = jacobian_q_wrt_lambda(q, lam)              # [B,N,N]
+    JT = J - mean(J, axis=-1, keepdims=True)       # project derivative index
+    radial = 0.5 * sum(JT**2, axis=(-1,-2))        # [B]
+
+    angular = zeros(B)
+    for i in range(N):
+        for j in range(i+1,N):
+            dq = q[:,i] - q[:,j]
+            dl = lam[:,i] - lam[:,j]
+            angular += (dq/dl)**2
+
+    F = radial + angular + V*R
+    e = F/R
+    return e, F, R, radial, angular, V
+\end{lstlisting}
+
+For the ansatz $q_i=e^{-S/2}a_i$, automatic differentiation can compute $J$ directly.  For speed, one may use the analytic identity
+\begin{equation}
+\gradT q_i=e^{-S/2}\left(\gradT a_i-\frac12a_i\gradT S\right).
+\end{equation}
+Then
+\begin{equation}
+\frac12\sum_i|\gradT q_i|^2
+=\frac12e^{-S}\sum_i\left|\gradT a_i-\frac12a_i\gradT S\right|^2.
+\end{equation}
+Also
+\begin{equation}
+\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}
+=e^{-S}\sum_{i<j}\frac{(a_i-a_j)^2}{(\lambda_i-\lambda_j)^2}.
+\end{equation}
+The common factor $e^{-S}$ cancels against $R=e^{-S}\sum_i a_i^2$ in the local estimator, giving
+\begin{equation}
+\boxed{
+ e(\bm\lambda)=V+
+\frac{
+\frac12\sum_i\left|\gradT a_i-\frac12a_i\gradT S\right|^2
++\sum_{i<j}\frac{(a_i-a_j)^2}{(\lambda_i-\lambda_j)^2}
+}{
+\sum_i a_i^2
+}.
+}
+\label{eq:local_estimator_aS}
+\end{equation}
+This is the most efficient estimator for the recommended ansatz.
+
+\subsection{Computing Chebyshev features}
+
+Use the recurrence
+\begin{equation}
+T_0(t)=1,
+\qquad
+T_1(t)=t,
+\qquad
+T_{k+1}(t)=2tT_k(t)-T_{k-1}(t).
+\end{equation}
+The derivative satisfies
+\begin{equation}
+\frac{\dd}{\dd t}T_k(t)=kU_{k-1}(t),
+\end{equation}
+where $U_k$ is the Chebyshev polynomial of the second kind.  For automatic differentiation this derivative need not be coded explicitly, but analytic derivatives are useful for the generalized-eigenproblem implementation.
+
+Centered features are
+\begin{equation}
+B_{k,i}=T_k(t_i)-\overline{T_k},
+\qquad
+\overline{T_k}=\frac1N\sum_jT_k(t_j).
+\end{equation}
+If $L$ is fixed, then
+\begin{equation}
+\frac{\partial B_{k,i}}{\partial\lambda_\ell}
+=\frac1L\left[\delta_{i\ell}T_k'(t_i)-\frac1NT_k'(t_\ell)\right].
+\end{equation}
+After tangent projection.  If $L$ depends on $\bm\lambda$, include its derivative or detach $L$ from gradients for simplicity.
+
+\subsection{Numerical stabilizers}
+
+Useful stabilizers include:
+\begin{enumerate}[label=(\alph*)]
+\item Use double precision for final measurements.
+\item Clip extremely small pair gaps only during training, not during final evaluation.
+\item Add $\eps_n$ in Eq.~\eqref{eq:normalized_fiber} if using normalized fibers.
+\item In generalized eigenproblems, replace $S$ by $S+\eps_S I$ with $\eps_S$ between $10^{-10}$ and $10^{-6}$ depending on precision.
+\item Standardize input moments before feeding them into MLPs.
+\item Initialize near the harmonic solution:
+\begin{equation}
+S=\omega\sum_i\lambda_i^2,
+\qquad
+ a_i=\lambda_i.
+\end{equation}
+\end{enumerate}
+
+\section{Validation tests}
+
+\subsection{Test 1: harmonic adjoint energy}
+
+Set $g=0$ and use
+\begin{equation}
+S=\omega\sum_i\lambda_i^2,
+\qquad
+ a_i=\lambda_i.
+\end{equation}
+The measured energy must be
+\begin{equation}
+E=\frac\omega2(N^2-1)+\omega.
+\end{equation}
+This test checks the kinetic normalization, tangent projection, angular term coefficient, and Vandermonde sampling.
+
+\subsection{Test 2: collision regularity}
+
+Construct configurations with $\lambda_i\to\lambda_j$ and verify that
+\begin{equation}
+\frac{a_i-a_j}{\lambda_i-\lambda_j}
+\end{equation}
+remains finite.  For the pointwise ansatz $a_i=h(\lambda_i)-\bar h$, the limiting value is
+\begin{equation}
+\lim_{\lambda_i\to\lambda_j}\frac{a_i-a_j}{\lambda_i-\lambda_j}=h'(\lambda_i)
+\end{equation}
+when global moment derivatives are smooth and identical for the two colliding labels.
+
+\subsection{Test 3: Weyl covariance}
+
+For random permutations $\sigma$, verify numerically that
+\begin{equation}
+q_{\sigma(i)}(\sigma\bm\lambda)=q_i(\bm\lambda)
+\end{equation}
+up to floating-point error.  Also verify
+\begin{equation}
+\sum_iq_i=0.
+\end{equation}
+
+\subsection{Test 4: small-$N$ exact diagonalization}
+
+For $N=2$ or $N=3$, compare the variational energy against a direct basis diagonalization in Cartesian coordinates or against a high-resolution radial/eigenvalue solver.  This checks the quartic case beyond the harmonic limit.
+
+\subsection{Test 5: parity sectors}
+
+Because the potential is even under $X\mapsto -X$, the Hilbert space separates into even and odd parity.  The harmonic adjoint ground state is odd.  For $g\geq0$, optimize both:
+\begin{equation}
+q_i(-\bm\lambda)=-q_i(\bm\lambda)
+\end{equation}
+using an odd head, and
+\begin{equation}
+q_i(-\bm\lambda)=q_i(\bm\lambda)
+\end{equation}
+using an even head, then take the lower energy.  The odd sector is the natural starting point.
+
+\section{Recommended implementation path}
+
+\subsection{Stage A: deterministic harmonic check}
+
+Implement Eq.~\eqref{eq:local_estimator_aS}.  Plug in
+\begin{equation}
+S=\omega p_2,
+\qquad
+ a_i=\lambda_i,
+\qquad
+p_2=\sum_i\lambda_i^2.
+\end{equation}
+Sample from
+\begin{equation}
+\rho\propto\Delta^2e^{-\omega p_2}\sum_i\lambda_i^2.
+\end{equation}
+Check Eq.~\eqref{eq:harmonic_adjoint_energy}.
+
+\subsection{Stage B: optimize scalar singlet envelope}
+
+Before optimizing the full adjoint ansatz, optimize a singlet envelope $S_0$ by minimizing
+\begin{equation}
+E_0[S_0]=\E_{\rho_0}\left[V+\frac18|\gradT S_0|^2\right],
+\qquad
+\rho_0\propto\Delta^2e^{-S_0}.
+\end{equation}
+This gives a high-quality eigenvalue fluid.
+
+\subsection{Stage C: solve the adjoint impurity generalized eigenproblem}
+
+Use samples from $\rho_0$ and a Chebyshev basis $B_{k,i}$ to form $S_{\alpha\beta}$ and either $K_{\alpha\beta}$ or $H_{\alpha\beta}$.  Solve the generalized eigenproblem.  This gives a strong baseline adjoint energy with no nonlinear adjoint-network optimization.
+
+\subsection{Stage D: neural refinement}
+
+Use the generalized-eigenproblem solution to initialize the neural adjoint head.  Then optimize the full nonlinear ansatz
+\begin{equation}
+q_i=e^{-S_\theta/2}a_{\eta,i}
+\end{equation}
+with the fixed-proposal Rayleigh loss in Eq.~\eqref{eq:fixed_proposal_loss} or with a reparameterized flow estimator.
+
+\subsection{Stage E: large-$N$ acceleration}
+
+If $N$ is large, restrict the adjoint head initially to polynomial or Chebyshev functions of a single eigenvalue with moment-dependent coefficients.  Use power sums to accelerate the angular term.  Introduce pairwise neural features only if the polynomial impurity ansatz is demonstrably insufficient.
+
+\section{Default hyperparameters}
+
+The following settings are good starting points:
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Quantity & Symbol & Default \\
+\midrule
+Chebyshev degree & $K$ & $8$ to $32$ \\
+Moment cutoff & $M$ & $6$ to $12$ \\
+Batch size & $B$ & $10^3$ to $10^5$ depending on $N$ \\
+Precision & -- & float64 for validation; float32 or mixed for exploration \\
+MCMC sampler & -- & HMC in $N-1$ traceless coordinates \\
+HMC acceptance & -- & tune to $60\%$--$90\%$ \\
+Scalar tail & -- & initialize $S=\omega p_2$ \\
+Adjoint head & -- & initialize $a_i=\lambda_i$ \\
+Eigenproblem regularizer & $\eps_S$ & $10^{-10}$ to $10^{-6}$ \\
+Normalized fiber stabilizer & $\eps_n$ & $10^{-12}$ to $10^{-8}$ \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+For $g$ much larger than $\omega^3$, include the quartic WKB-inspired tail in Eq.~\eqref{eq:S_theta_recommended} from the start.
+
+\section{Summary of the final ansatz}
+
+The recommended final wavefunction is
+\begin{equation}
+\boxed{
+\Psi_{\theta,\eta}(X)
+=e^{-S_\theta(\bm\lambda)/2}
+U\left[
+\sum_{k=1}^Kc_k(\bm m;\eta)\widehat{T_k(\Lambda/L)}
+\right]U^\dagger,
+\qquad
+X=U\Lambda U^\dagger.
+}
+\end{equation}
+Equivalently, in components,
+\begin{equation}
+\boxed{
+q_i(\bm\lambda)
+=e^{-S_\theta(\bm\lambda)/2}
+\sum_{k=1}^Kc_k(\bm m;\eta)
+\left[T_k(\lambda_i/L)-\frac1N\sum_jT_k(\lambda_j/L)\right].
+}
+\end{equation}
+It satisfies:
+\begin{align}
+\sum_iq_i&=0,\\
+q_{\sigma(i)}(\sigma\bm\lambda)&=q_i(\bm\lambda),\\
+\Psi(VXV^\dagger)&=V\Psi(X)V^\dagger.
+\end{align}
+The exact energy is
+\begin{equation}
+\boxed{
+E=\frac{
+\int\dd\bm\lambda_T\Delta^2
+\left[\frac12\sum_i|\gradT q_i|^2
++\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}
++V\sum_iq_i^2\right]
+}{
+\int\dd\bm\lambda_T\Delta^2\sum_iq_i^2
+}.
+}
+\end{equation}
+This is the single most important formula for implementation.
+
+\appendix
+
+\section{Derivation of the angular kinetic term}
+
+For a small angular variation,
+\begin{equation}
+U\mapsto Ue^A,
+\qquad A^\dagger=-A,
+\end{equation}
+we have
+\begin{equation}
+\delta X=U[A,\Lambda]U^\dagger,
+\qquad
+\delta\Psi=U[A,Q]U^\dagger.
+\end{equation}
+For each pair $i<j$, the matrix element $A_{ij}$ has two real components.  The metric contribution from that pair is proportional to
+\begin{equation}
+(\lambda_i-\lambda_j)^2|A_{ij}|^2
+\end{equation}
+for $\delta X$, and to
+\begin{equation}
+(q_i-q_j)^2|A_{ij}|^2
+\end{equation}
+for $\delta\Psi$.  Contracting the field-space derivative with the inverse configuration-space metric gives a contribution proportional to
+\begin{equation}
+\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}.
+\end{equation}
+Accounting for the two real angular directions and the overall kinetic factor $\frac12$ gives exactly the term appearing in Eq.~\eqref{eq:kinetic_reduced}:
+\begin{equation}
+\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}.
+\end{equation}
+This derivation also shows why the ansatz must be collision-regular: finite energy requires $q_i-q_j=O(\lambda_i-\lambda_j)$ as $\lambda_i\to\lambda_j$.
+
+\section{Glossary of symbols}
+
+\begin{longtable}{p{0.22\textwidth}p{0.68\textwidth}}
+\toprule
+Symbol & Meaning \\
+\midrule
+\endhead
+$N$ & Matrix size; the gauge/global symmetry group is $SU(N)$. \\
+$X$ & Hermitian traceless matrix coordinate. \\
+$P$ & Canonical momentum conjugate to $X$. \\
+$T^a$ & Orthonormal Hermitian traceless generator, $\Tr(T^aT^b)=\delta^{ab}$. \\
+$\omega$ & Harmonic oscillator frequency parameter. \\
+$g$ & Quartic coupling, assumed nonnegative. \\
+$H$ & Hamiltonian $\frac12\Tr P^2+\frac12\omega^2\Tr X^2+g\Tr X^4$. \\
+$V(X)$ & Potential energy. \\
+$U$ & Unitary matrix diagonalizing $X$. \\
+$\Lambda$ & Diagonal matrix of eigenvalues of $X$. \\
+$\lambda_i$ & Eigenvalues of $X$, constrained by $\sum_i\lambda_i=0$. \\
+$\bm\lambda$ & Vector of eigenvalues. \\
+$\Delta(\bm\lambda)$ & Vandermonde determinant $\prod_{i<j}(\lambda_i-\lambda_j)$. \\
+$\Psi(X)$ & Matrix-valued adjoint-sector wavefunction. \\
+$Q(\bm\lambda)$ & Diagonal spectral profile of $\Psi$ on diagonal matrices. \\
+$q_i(\bm\lambda)$ & Diagonal entries of $Q$. \\
+$R(\bm\lambda)$ & Fiber norm $\sum_iq_i^2$. \\
+$S_\theta$ & Scalar envelope or effective action. \\
+$a_i$ & Unnormalized traceless adjoint head. \\
+$n_i$ & Normalized adjoint fiber, $\sum_in_i^2=1$. \\
+$\gradT$ & Tangent gradient on the hyperplane $\sum_i\lambda_i=0$. \\
+$\projT$ & Projector $I_N-\frac1N\bm1\bm1^T$. \\
+$m_k$ & Normalized moment $N^{-1}\sum_i\lambda_i^k$. \\
+$T_k$ & Chebyshev polynomial of the first kind. \\
+$B_{k,i}$ & Centered Chebyshev adjoint feature. \\
+$L$ & Eigenvalue scale used to form $t_i=\lambda_i/L$. \\
+$\rho_q$ & Monte Carlo density proportional to $\Delta^2\sum_iq_i^2$. \\
+$e_q$ & First-derivative Dirichlet local energy estimator. \\
+\bottomrule
+\end{longtable}
+
+\section{Minimal mathematical checklist}
+
+Before trusting a run, verify all of the following numerically:
+\begin{enumerate}[label=(\arabic*)]
+\item $\sum_i\lambda_i=0$ for every sample.
+\item $\sum_iq_i=0$ for every sample.
+\item $q_{\sigma(i)}(\sigma\bm\lambda)=q_i(\bm\lambda)$ for random permutations.
+\item $\frac{q_i-q_j}{\lambda_i-\lambda_j}$ is finite near collisions.
+\item The harmonic benchmark energy is $\frac\omega2(N^2-1)+\omega$.
+\item Energy estimates are stable as MCMC step size, batch size, and pair-gap cutoff are varied.
+\item The generalized eigenproblem overlap matrix is positive semidefinite; after regularization it is positive definite.
+\item The optimized energy decreases or remains unchanged when the basis size $K$ is increased.
+\end{enumerate}
+
+\section{References for context}
+
+The method above is self-contained, but it is related to several standard ideas: eigenvalue reduction of one-matrix models, Calogero-type angular kinetic terms for nonsinglet sectors, variational Monte Carlo, stochastic reconfiguration, and flow-based neural quantum states.  Useful background references include:
+
+\begin{thebibliography}{9}
+
+\bibitem{BIPZ}
+E. Brezin, C. Itzykson, G. Parisi, and J.-B. Zuber,
+``Planar diagrams,''
+\emph{Communications in Mathematical Physics} \textbf{59}, 35--51 (1978).
+
+\bibitem{JevickiSakita}
+A. Jevicki and B. Sakita,
+``The quantum collective field method and its application to the planar limit,''
+\emph{Nuclear Physics B} \textbf{165}, 511--527 (1980).
+
+\bibitem{Calogero}
+F. Calogero,
+``Solution of a three-body problem in one dimension,''
+\emph{Journal of Mathematical Physics} \textbf{10}, 2191 (1969).
+
+\bibitem{Sutherland}
+B. Sutherland,
+``Exact results for a quantum many-body problem in one dimension,''
+\emph{Physical Review A} \textbf{4}, 2019 (1971).
+
+\bibitem{CarleoTroyer}
+G. Carleo and M. Troyer,
+``Solving the quantum many-body problem with artificial neural networks,''
+\emph{Science} \textbf{355}, 602--606 (2017).
+
+\bibitem{Umrigar}
+C. J. Umrigar, J. Toulouse, C. Filippi, S. Sorella, and R. G. Hennig,
+``Alleviation of the Fermion-Sign Problem by Optimization of Many-Body Wave Functions,''
+\emph{Physical Review Letters} \textbf{98}, 110201 (2007).
+
+\end{thebibliography}
+
+\end{document}

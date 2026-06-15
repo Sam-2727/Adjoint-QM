@@ -12,6 +12,7 @@ from adjoint_qm import (  # noqa: E402
     HarmonicOscillatorPotential,
     RadialFeatureMap,
     QuarticOscillatorPotential,
+    SeparableGaussianEnvelopeMLP,
     align_wavefunction_sign,
     dirichlet_grid_1d,
     diagonalize_quartic_oscillator,
@@ -97,6 +98,24 @@ def test_radial_feature_map_is_rotationally_invariant() -> None:
     assert feature_map.output_dim(dim=2) == 1
     assert torch.allclose(feature_map(x), torch.tensor([[25.0], [5.0]]))
     assert torch.allclose(feature_map(x), feature_map(rotated))
+
+
+def test_separable_ansatz_sums_shared_one_body_factor() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = SeparableGaussianEnvelopeMLP(
+        dim=3,
+        hidden_layers=(8,),
+        init_alpha=1.1,
+        dtype=torch.float64,
+    )
+    x = torch.tensor(
+        [[-1.0, 0.5, 2.0], [0.25, -0.75, 1.25]],
+        dtype=torch.float64,
+    )
+    expected = model.one_body.log_psi(x.reshape(-1, 1)).reshape(2, 3).sum(dim=1)
+
+    assert torch.allclose(model.log_psi(x), expected)
+    assert model.alpha.item() == pytest.approx(model.one_body.alpha.item())
 
 
 def test_quartic_potential_and_perturbation_benchmarks() -> None:
@@ -281,6 +300,7 @@ def test_train_vmc_metropolis_smoke() -> None:
     )
 
     assert len(history) == 2
+    assert abs(history[-1].surrogate_loss) < 1.0e-12
     assert history[-1].energy == pytest.approx(1.0, abs=1.0e-12)
     assert 0.2 < history[-1].acceptance_rate < 0.9
 
@@ -421,6 +441,23 @@ def test_vmc_diagnostic_samples_exact_gaussian() -> None:
     assert 0.2 < result.acceptance_rate < 0.95
     assert obs.x2 == pytest.approx(0.5, abs=7.0e-2)
     assert obs.local_energy_mean == pytest.approx(0.5, abs=1.0e-10)
+
+
+def test_batched_vmc_observables_match_unbatched() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = exact_radial_model(1.0, dim=3)
+    potential = HarmonicOscillatorPotential(1.0)
+    samples = torch.randn(128, 3, dtype=torch.float64)
+
+    unbatched = vmc_observables(model, potential, samples)
+    batched = vmc_observables(model, potential, samples, batch_size=17)
+
+    assert batched.local_energy_mean == pytest.approx(unbatched.local_energy_mean)
+    assert batched.local_energy_std == pytest.approx(unbatched.local_energy_std)
+    assert batched.kinetic == pytest.approx(unbatched.kinetic)
+    assert batched.potential == pytest.approx(unbatched.potential)
+    assert batched.x2 == pytest.approx(unbatched.x2)
+    assert batched.r4 == pytest.approx(unbatched.r4)
 
 
 def test_krylov_correlator_matches_small_diagonal_hamiltonian() -> None:

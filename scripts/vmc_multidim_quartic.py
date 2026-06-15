@@ -64,7 +64,8 @@ def main() -> None:
     print()
     print(
         "dim seed step_size acceptance energy exact_energy energy_error "
-        "local_energy_stderr local_energy_std virial_residual"
+        "relative_error error_per_dim local_energy_stderr local_energy_std "
+        "virial_residual"
     )
 
     for offset, dim in enumerate(args.dims):
@@ -129,6 +130,8 @@ def main() -> None:
             f"{obs.local_energy_mean:.12f} "
             f"{exact_energy:.12f} "
             f"{obs.local_energy_mean - exact_energy:+.3e} "
+            f"{(obs.local_energy_mean - exact_energy) / exact_energy:+.3e} "
+            f"{(obs.local_energy_mean - exact_energy) / dim:+.3e} "
             f"{obs.local_energy_stderr:.3e} "
             f"{obs.local_energy_std:.3e} "
             f"{obs.virial_residual:+.3e}"

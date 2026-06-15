@@ -18,5 +18,8 @@ __pycache__/
 # Notebook checkpoints
 .ipynb_checkpoints/
 
+# Local numerical outputs
+results/
+
 # Codex working notes
 codex code reasoning/
