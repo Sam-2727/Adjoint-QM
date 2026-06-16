@@ -16,6 +16,7 @@ from adjoint_qm import (  # noqa: E402
     SUNAdjointChebyshevSpectralAnsatz,
     SUNAdjointLinearImpurityAnsatz,
     adjoint_eigenvalue_grid,
+    adjoint_linear_impurity_basis,
     adjoint_shape_features,
     adjoint_shape_quadratic_features,
     adjoint_importance_energy,
@@ -499,6 +500,68 @@ def test_full_neural_head_initializes_exactly_from_linear_impurity() -> None:
     assert neural_obs.energy == pytest.approx(linear_obs.energy, abs=1.0e-10)
 
 
+def test_linear_impurity_basis_uses_envelope_spectral_coordinates() -> None:
+    torch.set_default_dtype(torch.float64)
+    envelope = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        quartic_tail_init=2.0 * math.sqrt(2.0) / 3.0,
+        feature_mode="shape_quadratic",
+        hidden_layers=(),
+        head_hidden_layers=(),
+        head_coefficient_mode="full",
+        chebyshev_degrees=(1, 3),
+        scale_init=3.0,
+        coordinate_scale_init=1.35,
+        dtype=torch.float64,
+    )
+    terms = ("1", "rho", "u", "v", "rho2", "rho_u", "rho_v")
+    coefficients = torch.linspace(
+        -0.4,
+        0.6,
+        len(terms) * 2,
+        dtype=torch.float64,
+    )
+    linear = SUNAdjointLinearImpurityAnsatz(
+        envelope_model=envelope,
+        coefficients=coefficients,
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=envelope.feature_scale.detach(),
+        terms=terms,
+        tail_eps=envelope.tail_eps,
+    )
+    lam = torch.tensor(
+        [
+            [0.9, -0.2, -0.4, -0.3],
+            [-0.8, 0.6, 0.3, -0.1],
+        ],
+        dtype=torch.float64,
+    )
+
+    internal_basis = adjoint_linear_impurity_basis(
+        envelope.spectral_coordinates(lam),
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=envelope.feature_scale.detach(),
+        terms=terms,
+        eps=envelope.tail_eps,
+    )
+    raw_basis = adjoint_linear_impurity_basis(
+        lam,
+        chebyshev_degrees=(1, 3),
+        chebyshev_scale=envelope.scale.detach(),
+        feature_scale=envelope.feature_scale.detach(),
+        terms=terms,
+        eps=envelope.tail_eps,
+    )
+    expected_internal = torch.einsum("sai,a->si", internal_basis, coefficients)
+    raw_head = torch.einsum("sai,a->si", raw_basis, coefficients)
+
+    assert torch.max(torch.abs(linear.head(lam) - expected_internal)).item() < 1.0e-12
+    assert torch.max(torch.abs(expected_internal - raw_head)).item() > 1.0e-5
+
+
 def test_coordinate_scale_derivative_matches_virial_residual() -> None:
     torch.set_default_dtype(torch.float64)
     _, lam, weights = su3_adjoint_polar_eigenvalue_grid(
@@ -558,16 +621,16 @@ def test_su4_importance_coordinate_scale_autograd_matches_quartic_virial_residua
         omega_init=1.0,
         quartic_tail_init=2.0 * math.sqrt(2.0) / 3.0,
         moment_cutoff=6,
-        feature_mode="shape",
-        feature_scale_init=1.3,
-        hidden_layers=(),
-        head_hidden_layers=(),
-        chebyshev_degrees=(1,),
+        feature_mode="shape_quadratic",
+        feature_scale_init=3.0,
+        hidden_layers=(8,),
+        head_hidden_layers=(8,),
+        chebyshev_degrees=(1, 3),
         scale_init=3.0,
-        coordinate_scale_init=1.04,
+        coordinate_scale_init=1.0,
         learn_coordinate_scale=True,
-        action_correction_scale=0.0,
-        head_correction_scale=0.0,
+        action_correction_scale=0.05,
+        head_correction_scale=0.05,
         dtype=torch.float64,
     )
 
@@ -602,8 +665,8 @@ def test_su4_importance_coordinate_scale_autograd_matches_quartic_virial_residua
     assert math.isfinite(obs.energy)
     assert grad_log_scale.item() == pytest.approx(
         moments.virial_residual,
-        abs=1.0e-2,
-        rel=2.0e-3,
+        abs=5.0e-3,
+        rel=5.0e-3,
     )
 
 

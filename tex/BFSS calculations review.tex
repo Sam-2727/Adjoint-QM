@@ -1,0 +1,161 @@
+\documentclass[12pt]{article}
+\pdfoutput=1
+
+\usepackage{draft} 
+\usepackage{hyperref}
+\usepackage{graphicx,color,subfig}
+\usepackage{cite}
+\usepackage{mciteplus}
+\usepackage{skak}
+\usepackage{empheq}
+\usepackage{anyfontsize}
+% Use Chancery Font
+\DeclareFontFamily{OT1}{pzc}{}
+\DeclareFontShape{OT1}{pzc}{m}{it}{<-> s * [1.10] pzcmi7t}{}
+\DeclareMathAlphabet{\mathpzc}{OT1}{pzc}{m}{it}
+
+%\usepackage{chngcntr}
+%\counterwithout{equation}{section}
+
+\newcommand{\wt}[1]{\widetilde{#1}}
+\newcommand{\vv}[1]{\left\langle #1 \right\rangle}
+\newcommand{\un}[1]{\underline{#1}}
+\newcommand{\BL}[1]{{ {\color{blue}[#1]}}}
+\newcommand{\im}{\mathrm{Im}}
+
+
+\newcommand{\fixme}[1]{{\bf {\color{red}[#1]}}}
+\def\be#1\ee{\begin{align}#1\end{align}}
+\newcommand\nn{\nonumber}
+
+\begin{document}
+
+ 
+\unitlength = .8mm
+
+
+
+
+\section{Index computation for $SU(2)$}
+One wants to compute the Witten index for the non-compact theory (i.e. $\beta=\infty)$, but in general it turns out to be easier to compute in the compact case, plus then add the contribution of flux from the non-compact part. A particularly useful regulated form is then
+\ie
+\text{I}&=\lim_{R\to \infty}\lim_{\beta_0\to 0}\left[\int_{|x|<R}\Tr (-1)^F e^{-\beta_0 H}+\frac{1}{2}\int_{|x|=R}d\beta \Tr e_n (-1)^F Q e^{-\beta H}\right],
+\fe 
+where the second term comes from the identity
+\ie
+\partial_iA_\beta=\partial_\beta \tr (-1)^F e^{\beta H(x,x)}=\frac{1}{2}\partial_i \tr(e_i (-1)^F Q e^{-\beta H(x,x)}),
+\fe
+then transforming the integral over $\int_{|x|<R}\partial_iA_\beta$ to $\int_{|x|=R}A_\beta$, where
+\ie
+e^i_\alpha&\equiv M^{1/2}(\Gamma^i \hat{\Theta})_{\alpha},
+\fe
+and the identity uses that $H=Q_\alpha^2$ when acting on physical states as $C_{ab}|\Psi\rangle=0$, with
+\ie
+Q_\alpha&=M^{\frac{1}{2}}\Tr\left(\hat{P}_i (\Gamma^i \hat{\Theta}_\alpha\right)_\alpha -\frac{i}{2}[\hat{X}^i,\hat{X}^j](\Gamma_{ij}\hat{\Theta})_\alpha,\\
+H&=\frac{M}{2}\Tr(\hat{P}_i^2-\frac{1}{2}[\hat{X}_i,\hat{X}_j]^2-\Gamma_{\alpha\beta}^i\hat{\Theta}_\alpha[\hat{X}^i,\hat{\Theta}_\beta]),\\
+\hat{X}^i&\equiv (2\pi\alpha'T_0)^{-\frac{1}{3}}X^i,~\hat{P}_i\equiv (2\pi\alpha'/T_0)^{\frac{1}{3}},~M=(2\pi\alpha')^{-\frac{2}{3}}T_0^{-\frac{1}{3}},\\
+T_0&\equiv \frac{1}{g_A\sqrt{\alpha}},\\
+\{Q_\alpha,Q_\beta\}&=2\delta_{\alpha\beta}H+2\Gamma_{\alpha\beta}^i \hat{X}_{ab}^i C_{ab}.
+\fe
+($T_0$ is the mass of the $D0$-brane particle).
+
+In the $\beta_0\to 0$ limit, the first term becomes computable via the split
+\ie
+H&=\frac{1}{2}p^2+V(x)+H_F(x),\\
+V(x)&=-\frac{1}{2}[\hat{X}^i,\hat{X}^j]^2,\\
+H_F(x)&=-\frac{M}{2}\Tr\left(\Gamma_{\alpha\beta}^i\hat{\Theta}_\alpha [\hat{X}_i,\hat{\Theta}_\beta]\right).
+\fe
+
+With the term becoming
+\ie
+e^{-\beta H}(x,y)&\approx \frac{1}{(2\pi \beta)^{3d/2}}e^{-\frac{|x-y|^2}{2\beta}}e^{-\beta V(x)}e^{-\beta H_F(x)}.
+\fe
+
+The next trick is instead of evaluating on the gauge invariant states, we evaluate over all of $SU(N)$, as
+
+\ie
+\Pi&\equiv \int_{SU(N)}dg \Pi_B(g)\Pi_F(g),\\
+\Pi_B(g)\Psi(X)&=\Psi(g^{-1}Xg),~~ \Pi_F(g)\Theta_\alpha \Pi_F(g)^{-1}=g \Theta_\alpha g^{-1},
+\fe
+where $\Theta$ are the fermionic coordinates.
+
+Since $\int dg R(g)=0$ for any nontrivial representation $R$, $\Pi$ selects for gauge invariant states. Then the bulk contribution becomes
+\ie
+\int dx dg \Tr_F\left[(-1)^F \Pi_F(g) e^{-\beta H}(g^{-1}xg, x)\right].
+\fe
+
+Now, the gaussian contribution of $e^{-\frac{|gx-x|^2}{2\beta}}$ strongly suppresses $g\neq 1$. Expanding near the identity, one has
+\ie
+g\simeq 1+ix^A C^b_A+t^A C^f_A,
+\fe
+where $C^b_A$ are the adjoint representation generators. Rescale $x=\beta^{-1/4} x',\theta=\beta^{3/4}t,\beta V(x)=V(x')$, the bosonic exponential becomes
+\ie
+\beta^{-\frac{9}{4}(d-1)} e^{-\frac{\beta^{3/4}}{2}|i t\cdot C^A x|^2}e^{-V(x)}e^{-\beta^{3/4}H_f(x)}.
+\fe
+
+Alternatively, one can just set the exponent to zero with $y=x$, and then use that
+\ie
+\Pi(g)&=e^{i\lambda^A C_A}.
+\fe
+
+The gauge generator $C^A$ is
+\ie
+C_A&=f_{ABC}(x_B^i p_C^i-\frac{i}{2}\psi_{B\alpha}\psi_{C\alpha}),
+\fe
+(i.e. $C_A$ generates $\delta x, \delta \psi$),
+such that the two fermionic terms are manifestly quadratic in $\psi$.
+
+One then needs to compute the Pfaffian of
+\ie
+M\equiv -\frac{i}{2}f_{ABC}x_B^\mu \gamma^\mu.
+\fe
+
+Recall that $x_A^i$ is essentially a $3\times d$ matrix. The adjoint rep of $SU(2)$ is isomorphic to the fundamental rep of $SO(3)$, so under left action by the fundamental rep of $SO(3)$ (as well as right action), the expression is invariant. In the $\beta_0\to 0$ limit, there is an emergent $SO(3+1)$ symmetry acting on the right-hand side. Denote $\vec{t}=\vec{x}^0$, with $\vec{x}^\mu=(\vec{t},\vec{x}^i)$, with the vector notation representing the three numbers of $\vec{x}$ in the basis of $SO(3)$. The total bosonic expression becomes
+\ie
+-\frac{1}{2}\sum_{0\leq \mu < \nu \leq d}|\epsilon_{\mu\nu\rho}x^\nu x^\rho|^2
+\fe
+
+
+
+
+
+
+\end{document}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

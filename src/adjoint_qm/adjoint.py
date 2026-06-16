@@ -1295,8 +1295,12 @@ class SUNAdjointLinearImpurityAnsatz(nn.Module):
         return self.envelope_model.action(lam)
 
     def head_basis(self, lam: torch.Tensor) -> torch.Tensor:
-        return adjoint_linear_impurity_basis(
+        basis_coordinates = _linear_impurity_basis_coordinates(
+            self.envelope_model,
             lam,
+        )
+        return adjoint_linear_impurity_basis(
+            basis_coordinates,
             chebyshev_degrees=self.chebyshev_degrees,
             chebyshev_scale=self.linear_chebyshev_scale,
             feature_scale=self.linear_feature_scale,
@@ -1598,6 +1602,18 @@ def _model_coordinate_scale_value(model: nn.Module) -> float:
     return float(coordinate_scale.detach())
 
 
+def _linear_impurity_basis_coordinates(
+    envelope_model: nn.Module,
+    lam: torch.Tensor,
+) -> torch.Tensor:
+    """Return impurity-basis coordinates while preserving gradients in ``lam``."""
+
+    spectral_coordinates = getattr(envelope_model, "spectral_coordinates", None)
+    if callable(spectral_coordinates):
+        return spectral_coordinates(lam)
+    return tangent_project(lam)
+
+
 def _linear_impurity_matrices_from_log_measure(
     envelope_model: nn.Module,
     lam: torch.Tensor,
@@ -1631,8 +1647,9 @@ def _linear_impurity_matrices_from_log_measure(
         retain_graph=True,
     )
     action_grad = tangent_project(action_grad)
+    basis_coordinates = _linear_impurity_basis_coordinates(envelope_model, lam_req)
     basis = adjoint_linear_impurity_basis(
-        lam_req,
+        basis_coordinates,
         chebyshev_degrees=chebyshev_degrees,
         chebyshev_scale=chebyshev_scale,
         feature_scale=feature_scale,

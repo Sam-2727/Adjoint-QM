@@ -1,0 +1,903 @@
+\documentclass[11pt]{article}
+
+\usepackage[margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{booktabs,longtable,array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{fancyhdr}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue!60!black,
+  urlcolor=blue!60!black,
+  citecolor=blue!60!black
+}
+
+\pagestyle{fancy}
+\setlength{\headheight}{14pt}
+\fancyhf{}
+\lhead{SU(4) adjoint-sector implementation instructions}
+\rhead{\thepage}
+
+\setlist[itemize]{leftmargin=2em,itemsep=0.25em,topsep=0.35em}
+\setlist[enumerate]{leftmargin=2em,itemsep=0.25em,topsep=0.35em}
+\renewcommand{\arraystretch}{1.22}
+
+\definecolor{codegray}{RGB}{245,245,245}
+\definecolor{codetext}{RGB}{20,20,20}
+\definecolor{statusgreen}{RGB}{0,105,55}
+\definecolor{statusorange}{RGB}{190,100,0}
+\definecolor{statusred}{RGB}{160,0,0}
+\definecolor{statusblue}{RGB}{0,80,150}
+
+\lstdefinestyle{pythonstyle}{
+  language=Python,
+  basicstyle=\ttfamily\small\color{codetext},
+  backgroundcolor=\color{codegray},
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  framerule=0pt,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  aboveskip=0.75em,
+  belowskip=0.75em
+}
+\lstdefinestyle{bashstyle}{
+  language=bash,
+  basicstyle=\ttfamily\small\color{codetext},
+  backgroundcolor=\color{codegray},
+  breaklines=true,
+  breakatwhitespace=false,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  framerule=0pt,
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  aboveskip=0.75em,
+  belowskip=0.75em
+}
+
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\Rvir}{R_{\mathrm{vir}}}
+\newcommand{\ESS}{\operatorname{ESS}}
+\newcommand{\SU}{\operatorname{SU}}
+\newcommand{\status}[2]{\textbf{\textcolor{#1}{#2}}}
+
+\title{Instructions for stabilizing and validating the \(\SU(4)\) adjoint-sector calculation in \texttt{Adjoint-QM}}
+\author{Technical implementation note}
+\date{Prepared from the code-review discussion and the attached Codex notes}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This note turns the recent review into an implementation checklist. It distinguishes what appears to have been implemented, what was claimed in the attached Codex notes but still must be verified against the public code, and what remains necessary before the \(\SU(4)\) adjoint-sector result should be trusted. The main conclusion is that the reduced adjoint Rayleigh quotient is not the suspect piece. The persistent \(\SU(4)\) difficulty is a validation and optimization problem: flexible neural candidates can lower a sampled Rayleigh quotient while failing independent scale stationarity. The robust path is: first optimize a scalar envelope, then solve a linear impurity generalized eigenproblem, and finally validate the resulting candidate with independent Monte Carlo. Neural refinement should be attempted only after this finite-dimensional baseline is wired, validated, and reproducible.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Scope and audit rule}
+
+This document is not a replacement for running the code. It is a precise set of engineering instructions for the repository.
+The single most important rule is:
+\begin{quote}
+Do not accept any statement in a Codex note as implemented until it is confirmed by the underlying Python source, tests, and a saved validation run.
+\end{quote}
+
+The attached Codex note claims that several items have now been implemented, including a ray-WKB tail, shape features, a linear generalized-eigenproblem impurity baseline, a basis ladder, an even-parity sector check, and a linear-to-neural initialization bridge. Those claims are useful, but they are not themselves a validation certificate. Every item below includes a concrete code-level check.
+
+\subsection{Record the exact repository state}
+
+Before making or evaluating changes, run:
+
+\begin{lstlisting}[style=bashstyle]
+git status --short
+git rev-parse HEAD
+python --version
+python - <<'PY'
+import torch
+print(torch.__version__)
+PY
+\end{lstlisting}
+
+Every JSON result file should include the commit hash, command line, random seed, sample counts, proposal width, accepted candidate name, and validation tolerances.
+
+
+\subsection{Blocking discrepancies found in the public-code audit}
+
+The code audit found several discrepancies that must be treated as blocking until the exact current commit proves otherwise:
+\begin{enumerate}
+\item The latest Codex note describes a linear impurity candidate selected by a new CLI flag, but the audited public benchmark script did not expose that flag.
+\item The same note describes a linear impurity ladder selected by a new CLI flag, but the audited public benchmark script did not expose that flag.
+\item The note describes configurable \texttt{feature\_mode} and \texttt{parity}, but the audited public benchmark script did not expose those options.
+\item The audited benchmark script passed \texttt{coordinate\_scale\_init} and
+\texttt{learn\_coordinate\_scale} to \texttt{SUNAdjointChebyshevSpectralAnsatz}, but the audited class signature did not accept those arguments.
+\item The audited benchmark script expected \texttt{obs.coordinate\_scale}, but the audited
+\texttt{AdjointObservables} dataclass did not contain that field.
+\item The audited library did not visibly export or define the linear impurity GEP classes/functions, the ray-WKB tail helper, or the shape-feature helpers in the public API.
+\item The audited script computed independent energy spread but did not use it as a hard acceptance gate.
+\end{enumerate}
+
+These discrepancies imply that a run of the public script may fail before reaching the physics calculation, or may run an older envelope/fixed-cloud path rather than the claimed linear-impurity path.  The first task is therefore to make the executable code path match the claimed pipeline.
+
+\section{Mathematical target}
+
+The Hamiltonian convention used here is
+\begin{equation}
+H=-\frac12\Delta_X+\frac12\omega^2\Tr X^2+g\Tr X^4,
+\qquad X\in\mathfrak{su}(N),\qquad g\ge 0.
+\end{equation}
+For an adjoint-sector spectral profile
+\begin{equation}
+\Psi(U\Lambda U^\dagger)=U\,\operatorname{diag}(q_1(\lambda),\ldots,q_N(\lambda))\,U^\dagger,
+\qquad \sum_i q_i=0,
+\end{equation}
+the reduced Rayleigh quotient is
+\begin{equation}
+E[q]=
+\frac{
+\int_{1\cdot\lambda=0}d\lambda_T\,\Delta(\lambda)^2
+\left[
+\frac12\sum_i |\nabla_Tq_i|^2+
+\sum_{i<j}\frac{(q_i-q_j)^2}{(\lambda_i-\lambda_j)^2}
++V(\lambda)\sum_i q_i^2
+\right]
+}{
+\int_{1\cdot\lambda=0}d\lambda_T\,\Delta(\lambda)^2\sum_iq_i^2
+},
+\end{equation}
+where
+\begin{equation}
+V(\lambda)=\frac12\omega^2\sum_i\lambda_i^2+g\sum_i\lambda_i^4.
+\end{equation}
+The virial residual for this convention is
+\begin{equation}
+\Rvir=2\langle T\rangle-
+\omega^2\langle\Tr X^2\rangle-
+4g\langle\Tr X^4\rangle.
+\label{eq:virial}
+\end{equation}
+A correctly optimized bound state must have \(\Rvir\approx0\) within the independent evaluation error.
+
+\section{Root diagnosis for the \(\SU(4)\) failure}
+
+There are two different failure modes, and they must not be conflated.
+
+\subsection{Failure mode A: pipeline mismatch}
+
+If the run command does not actually instantiate the linear impurity generalized eigenproblem, then the validated finite-dimensional route is never tested. In that case, a failure of \(\SU(4)\) is a wiring failure, not a physics failure.
+
+The route that must exist in the executable benchmark is:
+\begin{equation}
+S_0(\lambda)
+\quad\longrightarrow\quad
+A_i^{(a)}(\lambda)
+\quad\longrightarrow\quad
+Hc=EMc
+\quad\longrightarrow\quad
+q_i(\lambda)=e^{-S_0(\lambda)/2}\sum_a c_a A_i^{(a)}(\lambda).
+\end{equation}
+The script must not stop at an envelope-only candidate or a fixed-cloud neural candidate.
+
+\subsection{Failure mode B: neural fixed-cloud overfitting}
+
+A flexible neural candidate can lower a sampled quotient on a fixed proposal cloud while failing the continuum stationarity test \eqref{eq:virial}. This is not a sign error in the virial theorem and is not evidence that the spectral adjoint reduction is wrong. It means the neural candidate is not yet a validated eigenstate.
+
+The practical rule is:
+\begin{quote}
+A lower fixed-cloud energy is not an acceptance criterion. Independent virial, effective sample size, energy-spread, symmetry, and benchmark gates are the acceptance criteria.
+\end{quote}
+
+\section{Implementation status checklist}
+
+Use Table \ref{tab:status} as the immediate audit checklist. The status labels are deliberately conservative. ``Implemented'' means the relevant primitive or flag appears to exist in the code path. ``Still needs verification'' means that a successful saved run and tests are still required before using it as evidence for the physics result. ``Not accepted'' means the code may run, but the resulting state should not be reported as a ground state.
+
+\begin{small}
+\begin{longtable}{p{0.23\linewidth}p{0.20\linewidth}p{0.47\linewidth}}
+\caption{Implementation status and required verification.}\label{tab:status}\\
+\toprule
+Item & Status & Required action \\
+\midrule
+\endfirsthead
+\toprule
+Item & Status & Required action \\
+\midrule
+\endhead
+Ray-WKB quartic tail \(\sqrt{p_2p_4}\) & \status{statusgreen}{Claimed; verify} & Confirm that the shared Chebyshev action calls \texttt{quartic\_ray\_wkb\_tail}, not the old coordinate-wise \(\sum_i(\lambda_i^2+\epsilon^2)^{3/2}\). \\
+\addlinespace
+Shape features \((\rho,u,v)\) and \((\rho,u,v,\rho^2,\rho u,\rho v)\) & \status{statusgreen}{Claimed; verify default} & Confirm that the benchmark script defaults to \texttt{feature\_mode="shape\_quadratic"} for the linear bridge and \texttt{shape} or \texttt{shape\_quadratic} for \(\SU(4)\) runs. \\
+\addlinespace
+Chebyshev degrees & \status{statusorange}{Verify default} & The first serious \(\SU(4)\) odd-sector run should default to \((1,3)\), not \((1,3,5)\). High degrees should be added only after the lower basis passes gates. \\
+\addlinespace
+Physical coordinate dilation & \status{statusgreen}{Claimed; needs test} & Keep it separate from the Chebyshev feature scale. Add/pass a \(\SU(4),g=1\) autograd virial-gradient test using Sobol-Gaussian importance sampling. \\
+\addlinespace
+Linear impurity GEP & \status{statusgreen}{Claimed; verify wiring} & Confirm that the public benchmark script actually exposes \texttt{--include-linear-impurity-candidate}, builds the GEP, wraps the solved head as an ansatz, and evaluates it through the same independent diagnostics. \\
+\addlinespace
+Linear impurity ladder & \status{statusgreen}{Claimed; verify} & Confirm \texttt{--include-linear-impurity-ladder}. Require monotone grid Ritz energies for nested bases, but accept rungs only by independent validation. \\
+\addlinespace
+Energy-spread gate & \status{statusorange}{Must gate} & Do not merely record the independent energy spread. Reject candidates with spread above \texttt{--energy-spread-abs-tol}. \\
+\addlinespace
+Even parity sector & \status{statusgreen}{Claimed; verify CLI} & Confirm \texttt{--parity even} changes Chebyshev degrees and structure diagnostics to \(q_i(-\lambda)=+q_i(\lambda)\). Compare accepted even and odd sector energies. \\
+\addlinespace
+Full Chebyshev coefficient head & \status{statusgreen}{Useful; not validation} & A full coefficient head can represent the linear impurity solution. This is a representation test, not proof that subsequent neural refinement is trustworthy. \\
+\addlinespace
+Multicloud neural training & \status{statusorange}{Diagnostic only} & Refreshed clouds help but do not automatically solve virial failure. Reject any neural candidate that fails independent gates, even if its mean energy is lower. \\
+\addlinespace
+Fixed-cloud flexible Adam candidate & \status{statusred}{Not accepted} & Keep it as a negative diagnostic only. It should not be selected as the \(\SU(4)\) ground state unless it passes all independent gates. \\
+\bottomrule
+\end{longtable}
+\end{small}
+
+\section{Code-level verification commands}
+
+These commands intentionally use both \texttt{grep} and tests. Grep verifies that a feature is present; tests verify that it works.
+
+\subsection{Check that the ray tail is used}
+
+\begin{lstlisting}[style=bashstyle]
+grep -R "def quartic_ray_wkb_tail" -n src/adjoint_qm
+grep -R "quartic_ray_wkb_tail" -n src/adjoint_qm/adjoint.py
+grep -R "sum(.*1.5\|\*\* 1.5\|(.*tail_eps.*)" -n src/adjoint_qm/adjoint.py
+\end{lstlisting}
+
+The old coordinate-wise quartic tail may still exist in older radial classes, but the shared Chebyshev \(\SU(N)\) class used by \(\SU(4)\) should use
+\begin{equation}
+S_{\mathrm{tail}}(\lambda)=\gamma\sqrt{p_2+\epsilon^2}\sqrt{p_4+\epsilon^4},
+\qquad
+p_k=\sum_i\lambda_i^k,
+\qquad
+\gamma=\frac{2\sqrt{2g}}{3}.
+\end{equation}
+
+\subsection{Check feature mode and degree defaults}
+
+\begin{lstlisting}[style=bashstyle]
+grep -R "feature_mode" -n scripts src tests
+grep -R "shape_quadratic\|adjoint_shape_features" -n scripts src tests
+grep -R "chebyshev_degrees" -n scripts/run_sun_adjoint_vmc_benchmarks.py
+\end{lstlisting}
+
+For \(\SU(4)\), the recommended first default is:
+\begin{lstlisting}[style=pythonstyle]
+feature_mode = "shape_quadratic"  # for linear bridge and exact ladder factors
+chebyshev_degrees = (1, 3)         # odd sector
+# or
+chebyshev_degrees = (2, 4)         # even sector
+\end{lstlisting}
+
+\subsection{Check linear impurity wiring}
+
+\begin{lstlisting}[style=bashstyle]
+grep -R "SUNAdjointLinearImpurityAnsatz" -n src scripts tests
+grep -R "linear_impurity" -n src scripts tests
+grep -R "include-linear-impurity-candidate" -n scripts
+grep -R "include-linear-impurity-ladder" -n scripts
+grep -R "initialize_full_chebyshev_head_from_linear_impurity" -n src scripts tests
+\end{lstlisting}
+
+The script must not only define flags; it must append the linear candidate to the candidate list and route it through the same \texttt{summarize\_candidate} or equivalent independent evaluation machinery.
+
+\subsection{Check exports}
+
+If scripts import through \texttt{from adjoint\_qm import ...}, then \texttt{src/adjoint\_qm/\_\_init\_\_.py} must export the linear API:
+
+\begin{lstlisting}[style=pythonstyle]
+SUNAdjointLinearImpurityAnsatz
+adjoint_linear_impurity_basis
+adjoint_quadrature_linear_impurity_eigenproblem
+solve_adjoint_linear_impurity_eigenproblem
+initialize_full_chebyshev_head_from_linear_impurity
+adjoint_shape_features
+adjoint_shape_quadratic_features
+quartic_ray_wkb_tail
+\end{lstlisting}
+
+If the script imports directly from \texttt{adjoint\_qm.adjoint}, this is less urgent, but exporting the public API is still cleaner.
+
+\section{Required mathematical implementation details}
+
+\subsection{Ray-WKB tail}
+
+Implement the shared Chebyshev tail as:
+
+\begin{lstlisting}[style=pythonstyle]
+def quartic_ray_wkb_tail(
+    lam: torch.Tensor,
+    *,
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    centered = tangent_project(lam)
+    p2 = torch.sum(centered**2, dim=-1)
+    p4 = torch.sum(centered**4, dim=-1)
+    return torch.sqrt(p2 + eps**2) * torch.sqrt(p4 + eps**4)
+\end{lstlisting}
+
+The corresponding initialization coefficient for the action convention \(q=e^{-S/2}a\) is
+\begin{equation}
+\gamma=\frac{2\sqrt{2g}}{3}.
+\end{equation}
+This reduces to the correct radial tail in \(\SU(2)\) and \(\SU(3)\), because there
+\begin{equation}
+p_4=\frac12p_2^2.
+\end{equation}
+
+\subsection{Shape features}
+
+Use dimensionless radius/shape variables instead of raw high moments:
+\begin{equation}
+\rho=\log(1+p_2/L_f^2),\qquad
+u=\frac{p_4}{p_2^2+\epsilon},\qquad
+v=\frac{p_3^2}{p_2^3+\epsilon}.
+\end{equation}
+The code may call the second variable \texttt{u}; in this note it is denoted \(\nu\) in equations to avoid confusion with a coordinate. For the linear bridge, use
+\begin{equation}
+(\rho,\nu,v,\rho^2,\rho\nu,\rho v).
+\end{equation}
+
+\begin{lstlisting}[style=pythonstyle]
+def adjoint_shape_features(
+    lam: torch.Tensor,
+    *,
+    feature_scale: torch.Tensor | float = 1.0,
+    eps: float = 1.0e-12,
+) -> torch.Tensor:
+    centered = tangent_project(lam)
+    scale = torch.as_tensor(feature_scale, dtype=lam.dtype, device=lam.device)
+    p2 = torch.sum(centered**2, dim=-1, keepdim=True)
+    p3 = torch.sum(centered**3, dim=-1, keepdim=True)
+    p4 = torch.sum(centered**4, dim=-1, keepdim=True)
+    rho = torch.log1p(p2 / scale**2)
+    u = p4 / (p2**2 + eps)
+    v = p3**2 / (p2**3 + eps)
+    return torch.cat([rho, u, v], dim=-1)
+\end{lstlisting}
+
+For \(N=4\), these variables are more appropriate than raw \(p_4,p_6,p_3^2\) because Newton identities imply that higher power sums do not add independent invariant information; they mainly worsen conditioning.
+
+\subsection{Separate feature scale from physical coordinate dilation}
+
+There must be two independent notions of scale:
+\begin{align}
+L_{\mathrm{cheb}} &: \text{the scale in } T_k(\lambda_i/L_{\mathrm{cheb}}),\\
+c_{\mathrm{phys}} &: \text{the physical dilation }q_c(\lambda)=q(c_{\mathrm{phys}}\lambda).
+\end{align}
+Only \(c_{\mathrm{phys}}\) is tied directly to the virial derivative:
+\begin{equation}
+\frac{\partial E}{\partial\log c_{\mathrm{phys}}}=
+2\langle T\rangle-
+\omega^2\langle\Tr X^2\rangle-
+4g\langle\Tr X^4\rangle.
+\end{equation}
+
+If \(c_{\mathrm{phys}}\) is represented by a softplus parameter \(c=\operatorname{softplus}(r)\), then
+\begin{equation}
+\frac{\partial E}{\partial\log c}
+=
+\frac{\partial E}{\partial r}\frac{c}{\sigma(r)}.
+\end{equation}
+This is the quantity to compare against \(\Rvir\).
+
+\subsection{Linear generalized-eigenproblem matrices}
+
+The finite-dimensional impurity basis should have profiles
+\begin{equation}
+A_i^{(\alpha,k)}(\lambda)=\phi_\alpha(\rho,\nu,v)
+\left[T_k(\lambda_i/L)-\frac1N\sum_jT_k(\lambda_j/L)\right].
+\end{equation}
+The odd default is \(k\in\{1,3\}\), and the default largest tested basis is
+\begin{equation}
+\phi_\alpha\in\{1,\rho,\nu,v,\rho^2,\rho\nu,\rho v\}.
+\end{equation}
+For a fixed approximate envelope \(S_0\), assemble
+\begin{equation}
+M_{ab}=\int d\lambda_T\,\Delta^2e^{-S_0}\sum_iA_i^{(a)}A_i^{(b)},
+\end{equation}
+\begin{align}
+H_{ab}=&\int d\lambda_T\,\Delta^2e^{-S_0}
+\Bigg[
+\frac12\sum_i
+\left(\nabla_TA_i^{(a)}-\frac12A_i^{(a)}\nabla_TS_0\right)\cdot
+\left(\nabla_TA_i^{(b)}-\frac12A_i^{(b)}\nabla_TS_0\right)\notag\\
+&\hspace{2em}
++\sum_{i<j}\frac{(A_i^{(a)}-A_j^{(a)})(A_i^{(b)}-A_j^{(b)})}{(\lambda_i-\lambda_j)^2}
++V(\lambda)\sum_iA_i^{(a)}A_i^{(b)}
+\Bigg].
+\end{align}
+Then solve
+\begin{equation}
+Hc=EMc.
+\end{equation}
+Near-null overlap directions should be projected out before solving.
+
+\subsection{Important coordinate-scale consistency in the linear basis}
+
+If the envelope action uses internal coordinates
+\begin{equation}
+x=c_{\mathrm{phys}}\Pi_T\lambda,
+\end{equation}
+then the linear basis should use the same spectral coordinates. However, derivatives must still be taken with respect to the external sampled \(\lambda\), so that autograd includes the chain rule through \(c_{\mathrm{phys}}\). The correct pattern is:
+
+\begin{lstlisting}[style=pythonstyle]
+lam_req = tangent_project(lam.detach()).clone().requires_grad_(True)
+x_req = envelope_model.spectral_coordinates(lam_req)  # if available
+basis = adjoint_linear_impurity_basis(x_req, ...)
+# gradients are taken with respect to lam_req, not detached x_req
+\end{lstlisting}
+
+If \(c_{\mathrm{phys}}=1\), this issue is harmless. If coordinate scale is learnable or fitted away from one, this can become a real source of virial mismatch.
+
+\section{Required tests}
+
+\subsection{Harmonic tests}
+
+The harmonic adjoint energy for \(g=0\) must be
+\begin{equation}
+E_{\mathrm{adj}}^{\mathrm{harm}}=\frac{\omega}{2}(N^2-1)+\omega.
+\end{equation}
+For \(N=4\) and \(\omega=1\), this is \(8.5\). The one-dimensional \(T_1\) linear impurity basis must reproduce this within quadrature tolerance.
+
+\subsection{Small-N radial tests}
+
+For \(N=2,3\), use the identity
+\begin{equation}
+\Tr X^4=\frac12(\Tr X^2)^2.
+\end{equation}
+The quartic problem is radial in matrix space. The shared \(\SU(N)\) code path must reproduce the independent radial finite-difference benchmark for both \(N=2\) and \(N=3\). This must be checked for the envelope candidate and for the optional linear candidate.
+
+\subsection{SU(4), \(g=1\), autograd virial-gradient test}
+
+Do not rely only on a harmonic or finite-box tensor-grid version of the scale test. Add a Sobol-Gaussian importance-sampling test of
+\begin{equation}
+\frac{\partial E}{\partial\log c_{\mathrm{phys}}}=\Rvir
+\end{equation}
+for \(\SU(4)\), \(g=1\). Skeleton:
+
+\begin{lstlisting}[style=pythonstyle]
+def test_su4_quartic_coordinate_scale_autograd_matches_virial() -> None:
+    torch.set_default_dtype(torch.float64)
+
+    samples = sobol_gaussian_traceless_samples(
+        4,
+        65536,
+        sigma=1.0,
+        seed=12345,
+        scramble=True,
+        dtype=torch.float64,
+    )
+
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        quartic_tail_init=2.0 * math.sqrt(2.0) / 3.0,
+        feature_mode="shape_quadratic",
+        feature_scale_init=3.0,
+        chebyshev_degrees=(1, 3),
+        parity="odd",
+        scale_init=3.0,
+        coordinate_scale_init=1.0,
+        learn_coordinate_scale=True,
+        hidden_layers=(8,),
+        head_hidden_layers=(8,),
+        action_correction_scale=0.05,
+        head_correction_scale=0.05,
+        dtype=torch.float64,
+    )
+
+    energy, *_ = adjoint_importance_energy(
+        model,
+        samples.lam,
+        samples.log_prob,
+        omega=1.0,
+        coupling=1.0,
+    )
+
+    (grad_raw,) = torch.autograd.grad(energy, model.raw_coordinate_scale)
+    c = model.coordinate_scale.detach()
+    dc_draw = torch.sigmoid(model.raw_coordinate_scale.detach())
+    grad_log_c = grad_raw.detach() * c / dc_draw
+
+    moments = adjoint_importance_moments(
+        model,
+        samples.lam,
+        samples.log_prob,
+        omega=1.0,
+        coupling=1.0,
+    )
+
+    assert grad_log_c.item() == pytest.approx(
+        moments.virial_residual,
+        abs=5.0e-3,
+        rel=5.0e-3,
+    )
+\end{lstlisting}
+
+Tolerances should reflect Sobol error and sample count. If this test fails reproducibly, the virial diagnostic and the scale derivative are not measuring the same object.
+
+\subsection{Structure tests}
+
+For every accepted candidate, check:
+\begin{align}
+&\max_\lambda\left|\sum_iq_i(\lambda)\right|<10^{-10},\\
+&\max_{\sigma,\lambda}\left|q_{\sigma(i)}(\sigma\lambda)-q_i(\lambda)\right|<10^{-10},\\
+&\text{odd sector: }q_i(-\lambda)=-q_i(\lambda),\\
+&\text{even sector: }q_i(-\lambda)=+q_i(\lambda),\\
+&\frac{q_i-q_j}{\lambda_i-\lambda_j}\text{ finite near eigenvalue collision.}
+\end{align}
+The collision test must not require \((a_i-a_j)/(\lambda_i-\lambda_j)\to1\) for a generic Chebyshev head. That condition is special to the simple \(a_i=\lambda_i\) head.
+
+\section{Acceptance gates}
+
+A candidate is accepted only if it passes all relevant gates below.
+
+\begin{longtable}{p{0.32\linewidth}p{0.52\linewidth}}
+\caption{Acceptance criteria for \(\SU(4)\).}\label{tab:gates}\\
+\toprule
+Gate & Requirement \\
+\midrule
+\endfirsthead
+\toprule
+Gate & Requirement \\
+\midrule
+\endhead
+Structure & Tracelessness, Weyl covariance, parity, and collision regularity pass. \\
+Effective sample size & \(\min_r \ESS_r/N_{\mathrm{samples}}>0.05\), preferably \(>0.1\). \\
+Virial & \(\max_r |\Rvir^{(r)}|<5\times10^{-3}\) for independent evaluation replicas. \\
+Independent energy spread & \(\max_rE_r-\min_rE_r < 2\times10^{-3}\) initially. Tighten if the claimed improvement is \(O(10^{-3})\). \\
+Small-N benchmark & For \(N=2,3\), match radial finite-difference benchmarks within the chosen tolerance. \\
+Monotone grid Ritz values & For a nested linear basis ladder, deterministic grid energies must be nonincreasing. This is necessary but not sufficient. \\
+Hellmann-Feynman & Where practical, verify \(\langle\Tr X^4\rangle\approx \partial E/\partial g\) by finite difference. \\
+Parity-sector comparison & Run both odd and even sectors. The selected ground state is the lower accepted sector. \\
+\bottomrule
+\end{longtable}
+
+Do not choose a candidate solely because it has the lowest training-grid or training-cloud energy.
+
+\section{Benchmark script requirements}
+
+The main benchmark script should expose and record at least these arguments:
+
+\begin{lstlisting}[style=bashstyle]
+--n-values
+--omega
+--coupling
+--seed
+--n-samples
+--eval-samples
+--n-eval-replicates
+--proposal-sigma
+--feature-mode {raw_moments,shape,shape_quadratic}
+--feature-scale-init
+--parity {odd,even}
+--chebyshev-degrees
+--learn-coordinate-scale
+--energy-spread-abs-tol
+--virial-abs-tol
+--min-ess-fraction
+--include-linear-impurity-candidate
+--include-linear-impurity-ladder
+--linear-impurity-terms
+--linear-impurity-overlap-rtol
+--include-linear-initialized-neural-candidate
+--linear-initialized-neural-steps
+--include-multicloud-candidate
+--multicloud-steps
+--multicloud-clouds-per-step
+--multicloud-lr
+\end{lstlisting}
+
+The saved JSON metadata should include all of these values, not only the final energies.
+
+\subsection{Candidate selection logic}
+
+The selection logic should be explicit:
+
+\begin{lstlisting}[style=pythonstyle]
+def candidate_passes(candidate: dict[str, Any], args: argparse.Namespace) -> bool:
+    if not candidate["structure_passed"]:
+        return False
+    if candidate["min_ess_fraction"] < args.min_ess_fraction:
+        return False
+    if candidate["max_abs_virial_residual"] > args.virial_abs_tol:
+        return False
+    if candidate["energy_spread_independent_runs"] > args.energy_spread_abs_tol:
+        return False
+    if "benchmark_energy_error" in candidate:
+        if abs(candidate["benchmark_energy_error"]) > args.energy_abs_tol:
+            return False
+    return True
+\end{lstlisting}
+
+For \(\SU(4)\), where there is no exact radial benchmark, the energy-spread, ESS, virial, and structure gates are non-negotiable.
+
+\section{Linear impurity candidate wiring}
+
+The benchmark should train an envelope candidate and keep the actual optimized envelope model object. It should then pass that object into the linear GEP builder.
+
+\begin{lstlisting}[style=pythonstyle]
+@dataclass
+class CandidateResult:
+    payload: dict[str, Any]
+    model: torch.nn.Module
+\end{lstlisting}
+
+The envelope trainer should return \texttt{CandidateResult}, not only a JSON payload. Then:
+
+\begin{lstlisting}[style=pythonstyle]
+envelope_result = train_envelope_quadrature_candidate(...)
+candidates.append(envelope_result.payload)
+
+if args.include_linear_impurity_candidate:
+    linear_result = train_linear_impurity_candidate(
+        n=n,
+        args=args,
+        envelope_model=envelope_result.model,
+        benchmark=benchmark,
+    )
+    candidates.append(linear_result.payload)
+\end{lstlisting}
+
+The linear candidate must be evaluated by the same independent Sobol machinery as every other candidate. No separate estimator is allowed for acceptance.
+
+\subsection{Default linear basis ladder}
+
+Use this nested ladder first:
+
+\begin{center}
+\begin{tabular}{cll}
+\toprule
+Rung & Shape factors \(\{\phi_\alpha\}\) & Chebyshev heads \(\{k\}\) \\
+\midrule
+0 & \(\{1\}\) & \(\{1\}\) \\
+1 & \(\{1,\rho,\nu,v\}\) & \(\{1\}\) \\
+2 & \(\{1,\rho,\nu,v\}\) & \(\{1,3\}\) \\
+3 & \(\{1,\rho,\nu,v,\rho^2,\rho\nu,\rho v\}\) & \(\{1,3\}\) \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Expected behavior: grid energies are monotone nonincreasing, but independent virial can fail for intermediate rungs. Accept only rungs that pass all gates.
+
+\section{Linear-to-neural bridge}
+
+The full Chebyshev coefficient head should be able to represent the solved linear impurity head exactly when:
+\begin{itemize}
+\item \texttt{head\_coefficient\_mode="full"};
+\item \texttt{feature\_mode="shape\_quadratic"};
+\item \texttt{head\_hidden\_layers=()} so the head is a single linear map from shape features to Chebyshev coefficients;
+\item the basis terms are \(1,\rho,\nu,v,\rho^2,\rho\nu,\rho v\).
+\end{itemize}
+
+Add a unit test asserting that the initialized neural head is proportional to the linear head and has the same quadrature energy:
+
+\begin{lstlisting}[style=pythonstyle]
+a_linear = linear_model.head(lam)
+a_neural = neural_model.head(lam)
+ratio = choose_nonzero_component_ratio(a_linear, a_neural)
+assert torch.max(torch.abs(a_linear - ratio * a_neural)) < 1.0e-10
+assert abs(E_linear - E_neural) < 1.0e-10
+\end{lstlisting}
+
+This bridge proves representability. It does not prove that training after initialization is valid. Any trained neural refinement must pass independent gates again.
+
+\section{Run sequence}
+
+\subsection{Unit and smoke tests}
+
+\begin{lstlisting}[style=bashstyle]
+pytest tests/test_sun_chebyshev_adjoint.py -q
+pytest tests/test_su2_adjoint.py tests/test_su3_adjoint.py -q
+\end{lstlisting}
+
+If these fail, do not run \(\SU(4)\) production jobs.
+
+\subsection{Shared small-N validation}
+
+\begin{lstlisting}[style=bashstyle]
+python scripts/run_sun_adjoint_vmc_benchmarks.py \
+  --n-values 2 3 \
+  --feature-mode shape_quadratic \
+  --chebyshev-degrees 1 3 \
+  --include-linear-impurity-candidate \
+  --validated-candidates
+\end{lstlisting}
+
+Expected: selected candidates agree with radial finite-difference references within tolerance and have small virial residuals.
+
+\subsection{SU(4) envelope and linear candidate}
+
+\begin{lstlisting}[style=bashstyle]
+python scripts/run_sun_adjoint_vmc_benchmarks.py \
+  --n-values 4 \
+  --feature-mode shape_quadratic \
+  --chebyshev-degrees 1 3 \
+  --include-linear-impurity-candidate \
+  --validated-candidates \
+  --eval-samples 131072 \
+  --n-eval-replicates 3 \
+  --proposal-sigma 1.0 \
+  --energy-spread-abs-tol 2e-3 \
+  --virial-abs-tol 5e-3 \
+  --min-ess-fraction 0.05
+\end{lstlisting}
+
+The selected \(\SU(4)\) candidate should be the linear impurity candidate if it passes independent gates and improves on the envelope baseline by more than the independent energy spread.
+
+\subsection{SU(4) basis ladder}
+
+\begin{lstlisting}[style=bashstyle]
+python scripts/run_sun_adjoint_vmc_benchmarks.py \
+  --n-values 4 \
+  --feature-mode shape_quadratic \
+  --chebyshev-degrees 1 3 \
+  --include-linear-impurity-ladder \
+  --validated-candidates \
+  --eval-samples 131072 \
+  --n-eval-replicates 3
+\end{lstlisting}
+
+Interpretation:
+\begin{itemize}
+\item monotone grid energies indicate the deterministic GEP assembly is internally consistent;
+\item independent virial failures indicate that the corresponding basis rung is not a validated continuum candidate;
+\item the largest basis is not automatically best unless it passes independent gates.
+\end{itemize}
+
+\subsection{Even-sector run}
+
+\begin{lstlisting}[style=bashstyle]
+python scripts/run_sun_adjoint_vmc_benchmarks.py \
+  --n-values 4 \
+  --parity even \
+  --feature-mode shape_quadratic \
+  --chebyshev-degrees 2 4 \
+  --learn-coordinate-scale \
+  --include-linear-impurity-ladder \
+  --validated-candidates \
+  --eval-samples 131072 \
+  --n-eval-replicates 3
+\end{lstlisting}
+
+If the accepted even-sector energy is far above the accepted odd-sector energy, the odd sector is the relevant low-energy adjoint sector for the \(g=1\) benchmark. This is a sector check, not a proof of exactness.
+
+\subsection{Linear-initialized neural candidate}
+
+Start with zero training steps:
+
+\begin{lstlisting}[style=bashstyle]
+python scripts/run_sun_adjoint_vmc_benchmarks.py \
+  --n-values 4 \
+  --feature-mode shape_quadratic \
+  --chebyshev-degrees 1 3 \
+  --include-linear-impurity-candidate \
+  --include-linear-initialized-neural-candidate \
+  --linear-initialized-neural-steps 0 \
+  --eval-samples 131072 \
+  --n-eval-replicates 3
+\end{lstlisting}
+
+This should reproduce the linear candidate up to Monte Carlo error. Then try small refinement steps only if the zero-step initialization passes gates.
+
+\section{Expected diagnostic values from the attached Codex note}
+
+The attached note reports the following values. Treat them as targets to reproduce, not as proof unless your current commit and command reproduce them.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Candidate & Reported quantity & Value \\
+\midrule
+Envelope-stabilized \(\SU(4)\) & \(E\) & approximately \(17.6708135\) \\
+Envelope-stabilized \(\SU(4)\) & \(\max|\Rvir|\) & approximately \(1.18\times10^{-4}\) \\
+Odd linear impurity \(\SU(4)\) & \(E\) & approximately \(17.6655400\) \\
+Odd linear impurity \(\SU(4)\) & energy spread & approximately \(1.23\times10^{-4}\) \\
+Odd linear impurity \(\SU(4)\) & \(\max|\Rvir|\) & approximately \(1.57\times10^{-3}\) \\
+Even-sector accepted candidate & \(E\) & approximately \(20.5358019\) \\
+Fixed-cloud flexible neural & status & reject if virial is \(O(10^{-1})\) \\
+Multicloud neural probes & status & reject unless virial passes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+These numbers support the interpretation that the finite-dimensional odd linear impurity candidate is the first nontrivial validated \(\SU(4)\) improvement, while the nonlinear neural correction is not yet trusted.
+
+\section{If \(\SU(4)\) still fails after these changes}
+
+Use the following decision tree.
+
+\subsection{The envelope baseline fails virial}
+
+Check:
+\begin{enumerate}
+\item the ray-WKB tail is actually used;
+\item \texttt{proposal\_sigma} gives acceptable ESS, roughly \(>0.1\) preferred;
+\item LBFGS is actually run after Adam or instead of Adam for the envelope;
+\item the independent evaluation uses fresh seeds, not the training cloud;
+\item the virial moment code uses the same norm weights as the energy code;
+\item the coordinate-scale virial-gradient test passes.
+\end{enumerate}
+
+\subsection{The linear GEP lowers grid energy but fails independent virial}
+
+Check:
+\begin{enumerate}
+\item the GEP matrix includes the full approximate-envelope derivative term
+\(\nabla A_i-\frac12A_i\nabla S_0\);
+\item the angular term is included with exactly
+\(\sum_{i<j}(A_i-A_j)(B_i-B_j)/(\lambda_i-\lambda_j)^2\);
+\item overlap null-space projection is not removing the physical lowest vector;
+\item the same envelope model is used for GEP assembly and validation;
+\item if coordinate scale is not one, the basis uses the same internal spectral coordinates as the envelope;
+\item the proposal ESS is not too low;
+\item independent energy spread is below tolerance.
+\end{enumerate}
+
+\subsection{The neural candidate has lower energy but fails virial}
+
+This is the known failure mode. Do not try to fix it by merely training longer on one cloud. Instead:
+\begin{enumerate}
+\item initialize from the linear candidate;
+\item use refreshed or multiple independent Sobol clouds;
+\item add regularization on deviations from the linear solution;
+\item reduce learning rate and use early stopping by independent virial, not by training energy;
+\item consider a lagged target proposal, MALA, HMC, or a trained flow to improve ESS;
+\item require the neural correction to pass all independent gates before reporting it.
+\end{enumerate}
+
+\section{Reporting standards}
+
+Every reported \(\SU(4)\) result should state:
+\begin{itemize}
+\item the commit hash;
+\item the exact command line;
+\item candidate type: envelope, linear impurity, linear-initialized neural, multicloud neural, etc.;
+\item parity sector;
+\item basis terms and Chebyshev degrees;
+\item training grid or sample count;
+\item independent evaluation sample count and number of replicas;
+\item proposal width and ESS fraction;
+\item energy mean and independent spread;
+\item \(\langle T\rangle\), \(\langle\Tr X^2\rangle\), \(\langle\Tr X^4\rangle\), and \(\Rvir\);
+\item structure diagnostics;
+\item whether the candidate passed all gates;
+\item comparison to envelope baseline and, for \(N=2,3\), to radial finite-difference references.
+\end{itemize}
+
+Avoid saying ``the ground state was found'' unless the accepted candidate is lower than all other validated sector candidates and has passed the above gates. A safer phrase is:
+\begin{quote}
+``The current best validated variational candidate in the tested odd/even adjoint sectors is ...''
+\end{quote}
+
+\section{Minimal implementation priority order}
+
+Use this order to avoid chasing neural artifacts:
+
+\begin{enumerate}
+\item Record the commit and run the unit tests.
+\item Verify that the ray tail and shape features are truly active in the benchmark script.
+\item Verify the \(\SU(4),g=1\) Sobol autograd virial-gradient test.
+\item Stabilize the envelope LBFGS baseline.
+\item Wire and validate the linear impurity GEP candidate.
+\item Run the odd-sector linear basis ladder.
+\item Run the even-sector ladder or at least the even envelope check.
+\item Use the linear-to-neural bridge with zero training steps and verify equivalence.
+\item Only then attempt neural refinement, using refreshed/multiple clouds and independent-gate early stopping.
+\end{enumerate}
+
+\section{Summary}
+
+The root problem is not the adjoint spectral reduction or the virial formula. The root problem is candidate validation. For \(\SU(4)\), the first trustworthy route is the finite-dimensional linear impurity generalized eigenproblem on top of a stabilized scalar envelope. The nonlinear neural correction remains an open optimization problem. It should be considered unvalidated until it improves on the linear candidate and passes independent virial, ESS, energy-spread, symmetry, parity, and, where possible, Hellmann-Feynman checks.
+
+\end{document}

@@ -4,9 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import copy
+from dataclasses import dataclass
 import json
 import math
+import platform
 from pathlib import Path
+import subprocess
 import sys
 import time
 from typing import Any
@@ -40,6 +44,12 @@ from adjoint_qm import (
 )
 
 
+@dataclass
+class CandidateResult:
+    payload: dict[str, Any]
+    model: torch.nn.Module
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -55,6 +65,13 @@ def parse_args() -> argparse.Namespace:
         "--training-mode",
         choices=["importance-adam", "validated-candidates"],
         default="validated-candidates",
+    )
+    parser.add_argument(
+        "--validated-candidates",
+        action="store_const",
+        dest="training_mode",
+        const="validated-candidates",
+        help="Alias for --training-mode validated-candidates.",
     )
     parser.add_argument("--n-steps", type=int, default=300)
     parser.add_argument("--n-samples", type=int, default=16384)
@@ -78,6 +95,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--linear-impurity-overlap-rtol", type=float, default=1.0e-10)
     parser.add_argument("--linear-initialized-neural-steps", type=int, default=40)
     parser.add_argument("--linear-initialized-neural-lr", type=float, default=2.0e-4)
+    parser.add_argument(
+        "--linear-initialized-neural-head-regularization",
+        type=float,
+        default=1.0e-3,
+        help=(
+            "Penalty on deviation of the neural impurity head from the exact "
+            "linear-impurity initialization during optional neural refinement."
+        ),
+    )
+    parser.add_argument(
+        "--linear-initialized-neural-action-regularization",
+        type=float,
+        default=1.0e-4,
+        help=(
+            "Penalty on deviation of the scalar envelope action from the "
+            "linear-impurity initialization during optional neural refinement."
+        ),
+    )
+    parser.add_argument(
+        "--linear-initialized-neural-regularization-samples",
+        type=int,
+        default=4096,
+        help="Fixed Sobol sample count used for the linear-solution regularizer.",
+    )
     parser.add_argument("--include-multicloud-candidate", action="store_true")
     parser.add_argument("--multicloud-steps", type=int, default=120)
     parser.add_argument("--multicloud-clouds-per-step", type=int, default=2)
@@ -85,7 +126,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--feature-mode",
         choices=["raw_moments", "shape", "shape_quadratic"],
-        default="shape",
+        default="shape_quadratic",
     )
     parser.add_argument("--feature-scale-init", type=float, default=1.0)
     parser.add_argument("--learn-feature-scale", action="store_true")
@@ -107,6 +148,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--energy-spread-abs-tol", type=float, default=2.0e-3)
     parser.add_argument("--virial-abs-tol", type=float, default=5.0e-3)
     parser.add_argument("--min-ess-fraction", type=float, default=0.05)
+    parser.add_argument("--include-hf-diagnostic", action="store_true")
+    parser.add_argument("--hf-delta", type=float, default=1.0e-3)
     return parser.parse_args()
 
 
@@ -114,6 +157,46 @@ def quartic_tail_initialization(coupling: float) -> float:
     """Ray-WKB coefficient for ``S ~ c sqrt(p2) sqrt(p4)``."""
 
     return 2.0 * math.sqrt(2.0 * coupling) / 3.0
+
+
+def git_commit_hash() -> str | None:
+    """Return the current git commit hash when the repository is available."""
+
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def git_status_short() -> str | None:
+    """Return short git status for reproducibility metadata."""
+
+    try:
+        return subprocess.check_output(
+            ["git", "status", "--short"],
+            cwd=ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def serializable_args(args: argparse.Namespace) -> dict[str, Any]:
+    """Return parsed CLI arguments in JSON-serializable form."""
+
+    payload: dict[str, Any] = {}
+    for key, value in vars(args).items():
+        if isinstance(value, Path):
+            payload[key] = str(value)
+        else:
+            payload[key] = value
+    return payload
 
 
 def shared_ansatz_config(args: argparse.Namespace) -> dict[str, Any]:
@@ -397,6 +480,19 @@ def combined_payload(evaluations: list[dict[str, Any]], benchmark: float | None)
     mean_virial = sum(item["virial_residual"] for item in evaluations) / len(
         evaluations
     )
+    mean_fields = {
+        f"{field}_mean": sum(item[field] for item in evaluations) / len(evaluations)
+        for field in [
+            "local_energy_std",
+            "radial",
+            "angular",
+            "potential",
+            "tr_x2",
+            "tr_x4",
+            "kinetic",
+            "virial_rhs",
+        ]
+    }
     energy_spread = (
         max(item["energy"] for item in evaluations)
         - min(item["energy"] for item in evaluations)
@@ -411,6 +507,7 @@ def combined_payload(evaluations: list[dict[str, Any]], benchmark: float | None)
         "virial_residual_mean": mean_virial,
         "virial_residual_abs_max": virial_abs_max,
         "min_effective_sample_size_fraction": min_ess_fraction,
+        **mean_fields,
     }
     if benchmark is not None:
         combined["benchmark_energy"] = benchmark
@@ -433,6 +530,14 @@ def candidate_passes(
         and structure["parity_residual"] < 1.0e-10
         and structure["weyl_covariance_residual"] < 1.0e-10
     ):
+        return False
+    if not math.isfinite(structure["head_collision_ratio_max_abs"]):
+        return False
+    if not math.isfinite(structure["profile_collision_identity_residual"]):
+        return False
+    if structure["head_collision_ratio_max_abs"] >= 1.0e8:
+        return False
+    if structure["profile_collision_identity_residual"] >= 1.0e-8:
         return False
     if combined["energy_spread_independent_runs"] >= args.energy_spread_abs_tol:
         return False
@@ -605,7 +710,7 @@ def train_envelope_quadrature_candidate(
     args: argparse.Namespace,
     *,
     benchmark: float | None,
-) -> dict[str, Any]:
+) -> CandidateResult:
     """Train the stable envelope subspace inside the shared flexible model."""
 
     model = make_shared_model(n, args)
@@ -617,13 +722,16 @@ def train_envelope_quadrature_candidate(
         ),
         **envelope_payload,
     }
-    return summarize_candidate(
-        "envelope_quadrature_lbfgs",
-        model,
-        args,
-        benchmark=benchmark,
-        training_payload=training_payload,
-        history=history,
+    return CandidateResult(
+        payload=summarize_candidate(
+            "envelope_quadrature_lbfgs",
+            model,
+            args,
+            benchmark=benchmark,
+            training_payload=training_payload,
+            history=history,
+        ),
+        model=model,
     )
 
 
@@ -903,11 +1011,19 @@ def train_linear_impurity_candidate(
     args: argparse.Namespace,
     *,
     benchmark: float | None,
+    envelope_result: CandidateResult | None = None,
 ) -> dict[str, Any]:
     """Solve the configured fixed-envelope linear impurity basis."""
 
-    model = make_shared_model(n, args)
-    envelope_payload, envelope_history = fit_envelope_lbfgs(model, n, args)
+    if envelope_result is None:
+        envelope_result = train_envelope_quadrature_candidate(
+            n,
+            args,
+            benchmark=benchmark,
+        )
+    model = envelope_result.model
+    envelope_payload = envelope_result.payload["training"]
+    envelope_history = envelope_result.payload["history"]
     lam, weights, grid_metadata = envelope_training_grid(n)
     return make_linear_impurity_candidate(
         "linear_impurity_after_envelope",
@@ -920,7 +1036,7 @@ def train_linear_impurity_candidate(
         args,
         benchmark=benchmark,
         terms=tuple(args.linear_impurity_terms),
-        chebyshev_degrees=tuple(args.chebyshev_degrees),
+        chebyshev_degrees=tuple(model.chebyshev_degrees),
     )
 
 
@@ -929,11 +1045,19 @@ def train_linear_impurity_ladder_candidates(
     args: argparse.Namespace,
     *,
     benchmark: float | None,
+    envelope_result: CandidateResult | None = None,
 ) -> list[dict[str, Any]]:
     """Run a nested linear impurity basis ladder from one envelope warm start."""
 
-    model = make_shared_model(n, args)
-    envelope_payload, envelope_history = fit_envelope_lbfgs(model, n, args)
+    if envelope_result is None:
+        envelope_result = train_envelope_quadrature_candidate(
+            n,
+            args,
+            benchmark=benchmark,
+        )
+    model = envelope_result.model
+    envelope_payload = envelope_result.payload["training"]
+    envelope_history = envelope_result.payload["history"]
     lam, weights, grid_metadata = envelope_training_grid(n)
     candidates: list[dict[str, Any]] = []
     previous_grid_energy: float | None = None
@@ -960,6 +1084,129 @@ def train_linear_impurity_ladder_candidates(
         previous_grid_energy = grid_energy
         candidates.append(candidate)
     return candidates
+
+
+def neural_refinement_regularization_setup(
+    model: SUNAdjointChebyshevSpectralAnsatz,
+    n: int,
+    args: argparse.Namespace,
+) -> dict[str, Any] | None:
+    """Return fixed reference tensors for linear-solution regularization."""
+
+    head_strength = args.linear_initialized_neural_head_regularization
+    action_strength = args.linear_initialized_neural_action_regularization
+    if head_strength == 0.0 and action_strength == 0.0:
+        return None
+    samples = sobol_gaussian_traceless_samples(
+        n,
+        args.linear_initialized_neural_regularization_samples,
+        sigma=args.proposal_sigma,
+        seed=args.seed + 3_500_000 * n,
+        dtype=torch.float64,
+    )
+    with torch.no_grad():
+        reference_head = model.head(samples.lam).detach()
+        reference_action = model.action(samples.lam).detach()
+        head_norm = torch.mean(reference_head**2).clamp_min(1.0e-12)
+        action_norm = torch.mean(reference_action**2).clamp_min(1.0e-12)
+    return {
+        "lam": samples.lam,
+        "seed": samples.seed,
+        "sample_count": samples.lam.shape[0],
+        "proposal_sigma": samples.sigma,
+        "reference_head": reference_head,
+        "reference_action": reference_action,
+        "head_norm": head_norm,
+        "action_norm": action_norm,
+    }
+
+
+def neural_refinement_regularization_loss(
+    model: SUNAdjointChebyshevSpectralAnsatz,
+    reference: dict[str, Any] | None,
+    args: argparse.Namespace,
+    like: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Return total, head, and action penalties against the linear solution."""
+
+    zero = torch.zeros((), dtype=like.dtype, device=like.device)
+    if reference is None:
+        return zero, zero, zero
+    head_penalty = zero
+    action_penalty = zero
+    if args.linear_initialized_neural_head_regularization > 0.0:
+        head_delta = model.head(reference["lam"]) - reference["reference_head"]
+        head_penalty = (
+            args.linear_initialized_neural_head_regularization
+            * torch.mean(head_delta**2)
+            / reference["head_norm"]
+        )
+    if args.linear_initialized_neural_action_regularization > 0.0:
+        action_delta = model.action(reference["lam"]) - reference["reference_action"]
+        action_penalty = (
+            args.linear_initialized_neural_action_regularization
+            * torch.mean(action_delta**2)
+            / reference["action_norm"]
+        )
+    return head_penalty + action_penalty, head_penalty, action_penalty
+
+
+def neural_refinement_checkpoint_payload(
+    model: SUNAdjointChebyshevSpectralAnsatz,
+    n: int,
+    args: argparse.Namespace,
+    *,
+    step: int,
+    seed: int,
+) -> dict[str, Any]:
+    """Evaluate one independent checkpoint cloud for neural early stopping."""
+
+    samples = sobol_gaussian_traceless_samples(
+        n,
+        args.n_samples,
+        sigma=args.proposal_sigma,
+        seed=seed,
+        dtype=torch.float64,
+    )
+    obs = adjoint_importance_observables(
+        model,
+        samples.lam,
+        samples.log_prob,
+        omega=args.omega,
+        coupling=args.coupling,
+    )
+    moments = adjoint_importance_moments(
+        model,
+        samples.lam,
+        samples.log_prob,
+        omega=args.omega,
+        coupling=args.coupling,
+    )
+    ess = effective_sample_size(model, samples.lam, samples.log_prob)
+    checkpoint_passed = (
+        math.isfinite(obs.energy)
+        and math.isfinite(moments.virial_residual)
+        and ess / args.n_samples > args.min_ess_fraction
+        and abs(moments.virial_residual) < args.virial_abs_tol
+    )
+    return {
+        "step": step,
+        "energy": obs.energy,
+        "radial": obs.radial,
+        "angular": obs.angular,
+        "potential": obs.potential,
+        "local_energy_std": obs.local_energy_std,
+        "virial_residual": moments.virial_residual,
+        "effective_sample_size": ess,
+        "effective_sample_size_fraction": ess / args.n_samples,
+        "sample_count": args.n_samples,
+        "seed": samples.seed,
+        "proposal_sigma": samples.sigma,
+        "alpha": obs.alpha,
+        "cubic": obs.cubic,
+        "coordinate_scale": obs.coordinate_scale,
+        "single_cloud_checkpoint_passed": checkpoint_passed,
+    }
 
 
 def train_linear_initialized_neural_candidate(
@@ -1027,6 +1274,22 @@ def train_linear_initialized_neural_candidate(
         }
     ]
 
+    initial_state = copy.deepcopy(model.state_dict())
+    regularization_reference = neural_refinement_regularization_setup(model, n, args)
+    initial_checkpoint = neural_refinement_checkpoint_payload(
+        model,
+        n,
+        args,
+        step=args.envelope_lbfgs_max_iter + 1,
+        seed=args.seed + 4_000_000 * n,
+    )
+    initial_checkpoint["stage"] = "linear_neural_initialization_checkpoint"
+    checkpoint_history = [initial_checkpoint]
+    best_checkpoint_state = copy.deepcopy(initial_state)
+    best_checkpoint_payload = copy.deepcopy(initial_checkpoint)
+    best_checkpoint_source = "linear_initialization"
+    best_checkpoint_passed = initial_checkpoint["single_cloud_checkpoint_passed"]
+
     set_full_trainability(model, args)
     train_start = time.perf_counter()
     if args.linear_initialized_neural_steps > 0:
@@ -1057,7 +1320,16 @@ def train_linear_initialized_neural_candidate(
                 )
                 losses.append(energy)
             loss = torch.stack(losses).mean()
-            loss.backward()
+            regularization_loss, head_regularization, action_regularization = (
+                neural_refinement_regularization_loss(
+                    model,
+                    regularization_reference,
+                    args,
+                    loss,
+                )
+            )
+            total_loss = loss + regularization_loss
+            total_loss.backward()
             torch.nn.utils.clip_grad_norm_(trainable_parameters, 10.0)
             optimizer.step()
 
@@ -1066,48 +1338,71 @@ def train_linear_initialized_neural_candidate(
                 or step % args.report_every == 0
                 or step == args.linear_initialized_neural_steps
             ):
-                eval_samples = sobol_gaussian_traceless_samples(
+                checkpoint = neural_refinement_checkpoint_payload(
+                    model,
                     n,
-                    args.n_samples,
-                    sigma=args.proposal_sigma,
+                    args,
+                    step=args.envelope_lbfgs_max_iter + 1 + step,
                     seed=args.seed + 4_000_000 * n + step,
-                    dtype=torch.float64,
                 )
-                obs = adjoint_importance_observables(
-                    model,
-                    eval_samples.lam,
-                    eval_samples.log_prob,
-                    omega=args.omega,
-                    coupling=args.coupling,
+                checkpoint["stage"] = "multicloud_neural_refinement_checkpoint"
+                checkpoint_history.append(checkpoint)
+                is_improving_checkpoint = (
+                    checkpoint["single_cloud_checkpoint_passed"]
+                    and (
+                        not best_checkpoint_passed
+                        or checkpoint["energy"] < best_checkpoint_payload["energy"]
+                    )
                 )
-                moments = adjoint_importance_moments(
-                    model,
-                    eval_samples.lam,
-                    eval_samples.log_prob,
-                    omega=args.omega,
-                    coupling=args.coupling,
-                )
+                if is_improving_checkpoint:
+                    best_checkpoint_state = copy.deepcopy(model.state_dict())
+                    best_checkpoint_payload = copy.deepcopy(checkpoint)
+                    best_checkpoint_source = f"training_step_{step}"
+                    best_checkpoint_passed = True
                 history.append(
                     {
                         "step": args.envelope_lbfgs_max_iter + 1 + step,
-                        "energy": obs.energy,
-                        "radial": obs.radial,
-                        "angular": obs.angular,
-                        "potential": obs.potential,
-                        "local_energy_std": obs.local_energy_std,
-                        "virial_residual": moments.virial_residual,
-                        "alpha": obs.alpha,
-                        "cubic": obs.cubic,
-                        "coordinate_scale": obs.coordinate_scale,
+                        "training_energy_loss": float(loss.detach()),
+                        "regularization_loss": float(regularization_loss.detach()),
+                        "head_regularization_loss": float(
+                            head_regularization.detach()
+                        ),
+                        "action_regularization_loss": float(
+                            action_regularization.detach()
+                        ),
+                        "total_loss": float(total_loss.detach()),
+                        "energy": checkpoint["energy"],
+                        "radial": checkpoint["radial"],
+                        "angular": checkpoint["angular"],
+                        "potential": checkpoint["potential"],
+                        "local_energy_std": checkpoint["local_energy_std"],
+                        "virial_residual": checkpoint["virial_residual"],
+                        "effective_sample_size_fraction": checkpoint[
+                            "effective_sample_size_fraction"
+                        ],
+                        "single_cloud_checkpoint_passed": checkpoint[
+                            "single_cloud_checkpoint_passed"
+                        ],
+                        "alpha": checkpoint["alpha"],
+                        "cubic": checkpoint["cubic"],
+                        "coordinate_scale": checkpoint["coordinate_scale"],
                         "stage": "multicloud_neural_refinement",
                     }
                 )
     train_wall_time = time.perf_counter() - train_start
+    if best_checkpoint_passed:
+        model.load_state_dict(best_checkpoint_state)
+    else:
+        model.load_state_dict(initial_state)
+        best_checkpoint_source = "linear_initialization_fallback"
+        best_checkpoint_payload = copy.deepcopy(initial_checkpoint)
 
     training_payload = {
         "method": (
             "envelope LBFGS plus linear impurity generalized eigenproblem, "
-            "mapped exactly into a full Chebyshev neural coefficient head"
+            "mapped exactly into a full Chebyshev neural coefficient head; "
+            "optional refinement is regularized to the linear solution and "
+            "restored by independent single-cloud checkpoint gates"
         ),
         "warm_start": envelope_payload,
         "grid": grid_metadata,
@@ -1121,6 +1416,26 @@ def train_linear_initialized_neural_candidate(
         "linear_solve_and_init_wall_time_seconds": linear_wall_time,
         "neural_refinement_steps": args.linear_initialized_neural_steps,
         "neural_refinement_lr": args.linear_initialized_neural_lr,
+        "neural_refinement_head_regularization": (
+            args.linear_initialized_neural_head_regularization
+        ),
+        "neural_refinement_action_regularization": (
+            args.linear_initialized_neural_action_regularization
+        ),
+        "neural_refinement_regularization_sample_count": (
+            0
+            if regularization_reference is None
+            else regularization_reference["sample_count"]
+        ),
+        "neural_refinement_regularization_seed": (
+            None if regularization_reference is None else regularization_reference["seed"]
+        ),
+        "neural_refinement_checkpoint_history": checkpoint_history,
+        "neural_refinement_restored_checkpoint_source": best_checkpoint_source,
+        "neural_refinement_restored_checkpoint_passed_single_cloud_gates": (
+            best_checkpoint_passed
+        ),
+        "neural_refinement_restored_checkpoint": best_checkpoint_payload,
         "sample_count_per_cloud": args.n_samples,
         "clouds_per_step": args.multicloud_clouds_per_step,
         "proposal_sigma": args.proposal_sigma,
@@ -1236,16 +1551,27 @@ def train_one_n(n: int, args: argparse.Namespace) -> dict[str, Any]:
         train_importance_adam_candidate(n, args, benchmark=benchmark),
     ]
     if args.training_mode == "validated-candidates":
-        candidates.append(
+        envelope_result = (
             train_envelope_quadrature_candidate(n, args, benchmark=benchmark)
         )
+        candidates.append(envelope_result.payload)
         if args.include_linear_impurity_candidate:
             candidates.append(
-                train_linear_impurity_candidate(n, args, benchmark=benchmark)
+                train_linear_impurity_candidate(
+                    n,
+                    args,
+                    benchmark=benchmark,
+                    envelope_result=envelope_result,
+                )
             )
         if args.include_linear_impurity_ladder:
             candidates.extend(
-                train_linear_impurity_ladder_candidates(n, args, benchmark=benchmark)
+                train_linear_impurity_ladder_candidates(
+                    n,
+                    args,
+                    benchmark=benchmark,
+                    envelope_result=envelope_result,
+                )
             )
         if args.include_linear_initialized_neural_candidate:
             candidates.append(
@@ -1287,6 +1613,91 @@ def train_one_n(n: int, args: argparse.Namespace) -> dict[str, Any]:
     }
 
 
+def hellmann_feynman_payload(
+    n: int,
+    args: argparse.Namespace,
+    central_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Finite-difference check of dE/dg against <Tr X^4>."""
+
+    if args.hf_delta <= 0:
+        raise ValueError("--hf-delta must be positive")
+    if args.coupling - args.hf_delta < 0:
+        return {
+            "skipped": True,
+            "reason": "coupling - hf_delta would be negative",
+            "delta_g": args.hf_delta,
+        }
+
+    shifted: dict[str, dict[str, Any]] = {}
+    for label, coupling in [
+        ("minus", args.coupling - args.hf_delta),
+        ("plus", args.coupling + args.hf_delta),
+    ]:
+        shifted_args = copy.copy(args)
+        shifted_args.coupling = coupling
+        shifted_args.include_hf_diagnostic = False
+        shifted_args.seed = args.seed
+        shifted[label] = train_one_n(n, shifted_args)
+
+    target_name = central_payload["selected_candidate"]
+
+    def branch_payload(label: str) -> dict[str, Any]:
+        payload = shifted[label]
+        candidate_summary = payload["candidate_summaries"].get(target_name)
+        if candidate_summary is None:
+            candidate_summary = {
+                "combined_evaluation": payload["combined_evaluation"],
+                "passes_validation_gates": payload[
+                    "selected_candidate_passes_validation_gates"
+                ],
+            }
+            candidate_name = payload["selected_candidate"]
+            target_available = False
+        else:
+            candidate_name = target_name
+            target_available = True
+        return {
+            "coupling": (
+                args.coupling - args.hf_delta
+                if label == "minus"
+                else args.coupling + args.hf_delta
+            ),
+            "selected_candidate": payload["selected_candidate"],
+            "finite_difference_candidate": candidate_name,
+            "target_candidate_available": target_available,
+            "energy_mean": candidate_summary["combined_evaluation"]["energy_mean"],
+            "passes_validation_gates": candidate_summary["passes_validation_gates"],
+        }
+
+    minus_branch = branch_payload("minus")
+    plus_branch = branch_payload("plus")
+    e_plus = plus_branch["energy_mean"]
+    e_minus = minus_branch["energy_mean"]
+    derivative = (e_plus - e_minus) / (2.0 * args.hf_delta)
+    central_tr_x4 = central_payload["combined_evaluation"]["tr_x4_mean"]
+    return {
+        "skipped": False,
+        "delta_g": args.hf_delta,
+        "central_tr_x4": central_tr_x4,
+        "finite_difference_derivative": derivative,
+        "error": central_tr_x4 - derivative,
+        "central_selected_candidate": target_name,
+        "minus": minus_branch,
+        "plus": plus_branch,
+        "same_selected_candidate": (
+            shifted["minus"]["selected_candidate"]
+            == target_name
+            == shifted["plus"]["selected_candidate"]
+        ),
+        "same_finite_difference_candidate": (
+            minus_branch["finite_difference_candidate"]
+            == target_name
+            == plus_branch["finite_difference_candidate"]
+        ),
+    }
+
+
 def validation_payload(results: dict[str, Any]) -> dict[str, Any]:
     checks: dict[str, bool] = {}
     for key, payload in results["runs"].items():
@@ -1300,6 +1711,12 @@ def validation_payload(results: dict[str, Any]) -> dict[str, Any]:
             structure["traceless_residual"] < 1.0e-10
             and structure["parity_residual"] < 1.0e-10
             and structure["weyl_covariance_residual"] < 1.0e-10
+        )
+        checks[f"{key}_collision_regular"] = (
+            math.isfinite(structure["head_collision_ratio_max_abs"])
+            and math.isfinite(structure["profile_collision_identity_residual"])
+            and structure["head_collision_ratio_max_abs"] < 1.0e8
+            and structure["profile_collision_identity_residual"] < 1.0e-8
         )
         checks[f"{key}_virial_abs_lt_tol"] = (
             combined["virial_residual_abs_max"]
@@ -1364,15 +1781,35 @@ def main() -> None:
             raise ValueError("--linear-initialized-neural-steps must be non-negative")
         if args.linear_initialized_neural_lr <= 0:
             raise ValueError("--linear-initialized-neural-lr must be positive")
+        if args.linear_initialized_neural_head_regularization < 0:
+            raise ValueError(
+                "--linear-initialized-neural-head-regularization must be non-negative"
+            )
+        if args.linear_initialized_neural_action_regularization < 0:
+            raise ValueError(
+                "--linear-initialized-neural-action-regularization must be non-negative"
+            )
+        if args.linear_initialized_neural_regularization_samples < 1:
+            raise ValueError(
+                "--linear-initialized-neural-regularization-samples must be positive"
+            )
         if args.head_correction_scale <= 0:
             raise ValueError(
                 "--head-correction-scale must be positive for linear initialization"
             )
+    if args.include_hf_diagnostic and args.hf_delta <= 0:
+        raise ValueError("--hf-delta must be positive")
 
     results: dict[str, Any] = {
         "metadata": {
             "ansatz": "shared flexible SU(N) Chebyshev spectral impurity",
             "hamiltonian": "-1/2 Delta_X + 1/2 omega^2 Tr X^2 + g Tr X^4",
+            "command_line": sys.argv,
+            "git_commit": git_commit_hash(),
+            "git_status_short": git_status_short(),
+            "python_version": platform.python_version(),
+            "torch_version": torch.__version__,
+            "arguments": serializable_args(args),
             "omega": args.omega,
             "coupling": args.coupling,
             "seed": args.seed,
@@ -1389,6 +1826,15 @@ def main() -> None:
             "linear_impurity_overlap_rtol": args.linear_impurity_overlap_rtol,
             "linear_initialized_neural_steps": args.linear_initialized_neural_steps,
             "linear_initialized_neural_lr": args.linear_initialized_neural_lr,
+            "linear_initialized_neural_head_regularization": (
+                args.linear_initialized_neural_head_regularization
+            ),
+            "linear_initialized_neural_action_regularization": (
+                args.linear_initialized_neural_action_regularization
+            ),
+            "linear_initialized_neural_regularization_samples": (
+                args.linear_initialized_neural_regularization_samples
+            ),
             "include_multicloud_candidate": args.include_multicloud_candidate,
             "multicloud_steps": args.multicloud_steps,
             "multicloud_clouds_per_step": args.multicloud_clouds_per_step,
@@ -1397,6 +1843,8 @@ def main() -> None:
             "energy_spread_abs_tol": args.energy_spread_abs_tol,
             "virial_abs_tol": args.virial_abs_tol,
             "min_ess_fraction": args.min_ess_fraction,
+            "include_hf_diagnostic": args.include_hf_diagnostic,
+            "hf_delta": args.hf_delta,
             "shared_ansatz_config": shared_ansatz_config(args),
             "harmonic_exact_energies": {
                 str(n): exact_suN_harmonic_adjoint_energy(n, args.omega)
@@ -1415,7 +1863,14 @@ def main() -> None:
     }
     for n in args.n_values:
         print(f"training SU({n}) with shared flexible ansatz")
-        results["runs"][f"su{n}"] = train_one_n(n, args)
+        run_payload = train_one_n(n, args)
+        if args.include_hf_diagnostic:
+            run_payload["hellmann_feynman"] = hellmann_feynman_payload(
+                n,
+                args,
+                run_payload,
+            )
+        results["runs"][f"su{n}"] = run_payload
 
     results["validation_summary"] = validation_payload(results)
     args.output.parent.mkdir(parents=True, exist_ok=True)
