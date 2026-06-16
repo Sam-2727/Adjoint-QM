@@ -1,0 +1,622 @@
+{
+  "metadata": {
+    "ansatz": "shared flexible SU(N) Chebyshev spectral impurity",
+    "hamiltonian": "-1/2 Delta_X + 1/2 omega^2 Tr X^2 + g Tr X^4",
+    "omega": 1.0,
+    "coupling": 1.0,
+    "seed": 7300,
+    "n_values": [
+      2,
+      3,
+      4
+    ],
+    "energy_abs_tol": 0.0005,
+    "virial_abs_tol": 0.005,
+    "min_ess_fraction": 0.05,
+    "shared_ansatz_config": {
+      "omega_init": 1.0,
+      "quartic_tail_init": 0.9428090415820635,
+      "moment_cutoff": 6,
+      "hidden_layers": [
+        24,
+        24
+      ],
+      "head_hidden_layers": [
+        24
+      ],
+      "chebyshev_degrees": [
+        1,
+        3,
+        5
+      ],
+      "scale_init": 3.0,
+      "learn_scale": false,
+      "coordinate_scale_init": 1.0,
+      "learn_coordinate_scale": false,
+      "action_correction_scale": 0.25,
+      "head_correction_scale": 0.25
+    },
+    "harmonic_exact_energies": {
+      "2": 2.5,
+      "3": 5.0,
+      "4": 8.5
+    },
+    "sampler": {
+      "algorithm": "scrambled Sobol Gaussian importance sampling in orthonormal traceless eigenvalue coordinates",
+      "n_train_samples": 16384,
+      "n_eval_samples": 65536,
+      "n_eval_replicates": 3,
+      "proposal_sigma": 1.0,
+      "independent_evaluation_samples": true
+    }
+  },
+  "runs": {
+    "su2": {
+      "reference": {
+        "method": "linear fit in 1/(n_grid+1)^2",
+        "r_max": 8.0,
+        "grids": [
+          1200,
+          1800,
+          2400
+        ],
+        "energies": [
+          4.190132921244622,
+          4.19015421389471,
+          4.190161671117232
+        ],
+        "extrapolated_energy": 4.190171265054598,
+        "slope": -55.30715082540093
+      },
+      "training_samples": {
+        "sample_count": 16384,
+        "seed": 7500,
+        "proposal_sigma": 1.0,
+        "effective_sample_size": 8264.233385253223
+      },
+      "training_wall_time_seconds": 24.10247295900035,
+      "history": [
+        {
+          "step": 1,
+          "energy": 4.21330855299932,
+          "radial": 1.4299706159130008,
+          "angular": 1.3453967379971221,
+          "potential": 1.4379411990891968,
+          "local_energy_std": 3.481673287158147,
+          "alpha": 0.9993679957908529,
+          "cubic": 0.9421986926155361,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 50,
+          "energy": 4.192006483382341,
+          "radial": 1.2963060313104522,
+          "angular": 1.3060169371667838,
+          "potential": 1.5896835149051054,
+          "local_energy_std": 3.470382631105235,
+          "alpha": 0.9879046300796953,
+          "cubic": 0.9285626202904478,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 100,
+          "energy": 4.191112191646722,
+          "radial": 1.295160362863372,
+          "angular": 1.3013741006960495,
+          "potential": 1.5945777280873004,
+          "local_energy_std": 3.4471223030036193,
+          "alpha": 0.9840973683343646,
+          "cubic": 0.9232017611340179,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 150,
+          "energy": 4.19064076165755,
+          "radial": 1.2904076663250263,
+          "angular": 1.3030453182560289,
+          "potential": 1.5971877770764944,
+          "local_energy_std": 3.4440220523591742,
+          "alpha": 0.9825758009552303,
+          "cubic": 0.9197893878151521,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 200,
+          "energy": 4.1904276325159575,
+          "radial": 1.287268822478904,
+          "angular": 1.3052057075870873,
+          "potential": 1.597953102449966,
+          "local_energy_std": 3.4459840240837627,
+          "alpha": 0.9817267598969802,
+          "cubic": 0.9175597690650307,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 250,
+          "energy": 4.19031949225018,
+          "radial": 1.2853795076971921,
+          "angular": 1.3064806168677405,
+          "potential": 1.598459367685248,
+          "local_energy_std": 3.448255893883421,
+          "alpha": 0.9810950171682297,
+          "cubic": 0.9160009014875027,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 300,
+          "energy": 4.190260388809724,
+          "radial": 1.2841284771139614,
+          "angular": 1.3073979826179511,
+          "potential": 1.5987339290778115,
+          "local_energy_std": 3.4505835308601314,
+          "alpha": 0.9806961720051086,
+          "cubic": 0.9149314263920247,
+          "coordinate_scale": 1.0
+        }
+      ],
+      "evaluations": [
+        {
+          "energy": 4.190260465243915,
+          "local_energy_std": 3.4505841022109944,
+          "sample_count": 65536,
+          "effective_sample_size": 33056.93391602589,
+          "effective_sample_size_fraction": 0.5044087816776411,
+          "seed": 9300,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 1.2841285271395082,
+          "angular": 1.3073979811592262,
+          "potential": 1.5987339569451806,
+          "tr_x2": 1.2145024923695389,
+          "tr_x4": 0.9914827107604111,
+          "kinetic": 2.591526508298734,
+          "virial_rhs": 5.180433335411183,
+          "virial_residual": 0.0026196811862853053,
+          "alpha": 0.9806961720051086,
+          "cubic": 0.9149314263920247,
+          "coordinate_scale": 1.0,
+          "benchmark_energy": 4.190171265054598,
+          "energy_error": 8.920018931668494e-05
+        },
+        {
+          "energy": 4.190260468607934,
+          "local_energy_std": 3.4505841044273096,
+          "sample_count": 65536,
+          "effective_sample_size": 33056.933930642816,
+          "effective_sample_size_fraction": 0.5044087819006777,
+          "seed": 9301,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 1.284128529214219,
+          "angular": 1.3073979809430851,
+          "potential": 1.5987339584506295,
+          "tr_x2": 1.214502492949629,
+          "tr_x4": 0.9914827119758148,
+          "kinetic": 2.5915265101573044,
+          "virial_rhs": 5.180433340852888,
+          "virial_residual": 0.002619679461720814,
+          "alpha": 0.9806961720051086,
+          "cubic": 0.9149314263920247,
+          "coordinate_scale": 1.0,
+          "benchmark_energy": 4.190171265054598,
+          "energy_error": 8.92035533359703e-05
+        },
+        {
+          "energy": 4.190260467409029,
+          "local_energy_std": 3.4505840809374324,
+          "sample_count": 65536,
+          "effective_sample_size": 33056.93393325692,
+          "effective_sample_size_fraction": 0.5044087819405658,
+          "seed": 9302,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 1.284128527933669,
+          "angular": 1.307397980900309,
+          "potential": 1.5987339585750513,
+          "tr_x2": 1.2145024930287618,
+          "tr_x4": 0.9914827120606707,
+          "kinetic": 2.591526508833978,
+          "virial_rhs": 5.180433341271445,
+          "virial_residual": 0.0026196763965113945,
+          "alpha": 0.9806961720051086,
+          "cubic": 0.9149314263920247,
+          "coordinate_scale": 1.0,
+          "benchmark_energy": 4.190171265054598,
+          "energy_error": 8.9202354430995e-05
+        }
+      ],
+      "combined_evaluation": {
+        "energy_mean": 4.190260467086959,
+        "energy_spread_independent_runs": 3.3640192853567896e-09,
+        "virial_residual_mean": 0.0026196790148391713,
+        "virial_residual_abs_max": 0.0026196811862853053,
+        "min_effective_sample_size_fraction": 0.5044087816776411,
+        "benchmark_energy": 4.190171265054598,
+        "energy_error": 8.920203236062463e-05
+      },
+      "structure_checks": {
+        "traceless_residual": 0.0,
+        "odd_parity_residual": 0.0,
+        "weyl_covariance_residual": 0.0,
+        "head_collision_ratio_max_abs": 0.23961814479553598,
+        "profile_collision_identity_residual": 0.0
+      }
+    },
+    "su3": {
+      "reference": {
+        "method": "linear fit in 1/(n_grid+1)^2",
+        "r_max": 8.0,
+        "grids": [
+          1200,
+          1800,
+          2400
+        ],
+        "energies": [
+          9.608716898891107,
+          9.608741804074711,
+          9.608750526440884
+        ],
+        "extrapolated_energy": 9.608761748100294,
+        "slope": -64.69053561471058
+      },
+      "training_samples": {
+        "sample_count": 16384,
+        "seed": 7600,
+        "proposal_sigma": 1.0,
+        "effective_sample_size": 5783.190316036149
+      },
+      "training_wall_time_seconds": 31.408151458999782,
+      "history": [
+        {
+          "step": 1,
+          "energy": 9.630748426336785,
+          "radial": 4.490182031424476,
+          "angular": 1.7775443348038116,
+          "potential": 3.363022060108497,
+          "local_energy_std": 5.16620825890667,
+          "alpha": 0.999367995791405,
+          "cubic": 0.9421986926064644,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 50,
+          "energy": 9.611010404958119,
+          "radial": 4.315589706891467,
+          "angular": 1.7542644903692892,
+          "potential": 3.541156207697362,
+          "local_energy_std": 5.030549621606368,
+          "alpha": 0.9876053667568556,
+          "cubic": 0.9277778571323984,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 100,
+          "energy": 9.60984816791909,
+          "radial": 4.306599362371337,
+          "angular": 1.7578867780629461,
+          "potential": 3.5453620274848077,
+          "local_energy_std": 5.0082582746095525,
+          "alpha": 0.9876857333919743,
+          "cubic": 0.9243354453749975,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 150,
+          "energy": 9.609304802304349,
+          "radial": 4.302360660033942,
+          "angular": 1.7599937242664174,
+          "potential": 3.5469504180039895,
+          "local_energy_std": 4.993847408931266,
+          "alpha": 0.9878920294378868,
+          "cubic": 0.9219381447909086,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 200,
+          "energy": 9.609074111015914,
+          "radial": 4.300818167702709,
+          "angular": 1.7609538085281196,
+          "potential": 3.5473021347850864,
+          "local_energy_std": 4.987473023380057,
+          "alpha": 0.9877074253878413,
+          "cubic": 0.9200846568549771,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 250,
+          "energy": 9.608907853287738,
+          "radial": 4.299854162324034,
+          "angular": 1.7611528915825934,
+          "potential": 3.547900799381111,
+          "local_energy_std": 4.984299413358152,
+          "alpha": 0.9873654788607132,
+          "cubic": 0.9185456951179418,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 300,
+          "energy": 9.60874822058257,
+          "radial": 4.299171490413998,
+          "angular": 1.7611011512914736,
+          "potential": 3.548475578877099,
+          "local_energy_std": 4.981836872379441,
+          "alpha": 0.9874712311641864,
+          "cubic": 0.9175798314124101,
+          "coordinate_scale": 1.0
+        }
+      ],
+      "evaluations": [
+        {
+          "energy": 9.60919920221777,
+          "local_energy_std": 4.983950089706993,
+          "sample_count": 65536,
+          "effective_sample_size": 23132.84126034267,
+          "effective_sample_size_fraction": 0.35297914520786544,
+          "seed": 10300,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 4.299624237424648,
+          "angular": 1.7611018341005784,
+          "potential": 3.5484731306925443,
+          "tr_x2": 2.0727116626380697,
+          "tr_x4": 2.5121172993735104,
+          "kinetic": 6.060726071525226,
+          "virial_rhs": 12.12118086013211,
+          "virial_residual": 0.00027128291834088714,
+          "alpha": 0.9874712311641864,
+          "cubic": 0.9175798314124101,
+          "coordinate_scale": 1.0,
+          "benchmark_energy": 9.608761748100294,
+          "energy_error": 0.00043745411747586616
+        },
+        {
+          "energy": 9.609159353063795,
+          "local_energy_std": 4.983692538554935,
+          "sample_count": 65536,
+          "effective_sample_size": 23132.928901400977,
+          "effective_sample_size_fraction": 0.3529804825042874,
+          "seed": 10301,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 4.299581332214751,
+          "angular": 1.7611013177724302,
+          "potential": 3.5484767030766133,
+          "tr_x2": 2.072713033606336,
+          "tr_x4": 2.5121201862734455,
+          "kinetic": 6.06068264998718,
+          "virial_rhs": 12.121193778700118,
+          "virial_residual": 0.00017152127424324703,
+          "alpha": 0.9874712311641864,
+          "cubic": 0.9175798314124101,
+          "coordinate_scale": 1.0,
+          "benchmark_energy": 9.608761748100294,
+          "energy_error": 0.00039760496350105257
+        },
+        {
+          "energy": 9.60913873579533,
+          "local_energy_std": 4.983688690007494,
+          "sample_count": 65536,
+          "effective_sample_size": 23132.942456486933,
+          "effective_sample_size_fraction": 0.3529806893384847,
+          "seed": 10302,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 4.299577735655103,
+          "angular": 1.761101376058118,
+          "potential": 3.5484596240821076,
+          "tr_x2": 2.0727097048430454,
+          "tr_x4": 2.5121047716605847,
+          "kinetic": 6.060679111713222,
+          "virial_rhs": 12.121128791485384,
+          "virial_residual": 0.00022943194105984333,
+          "alpha": 0.9874712311641864,
+          "cubic": 0.9175798314124101,
+          "coordinate_scale": 1.0,
+          "benchmark_energy": 9.608761748100294,
+          "energy_error": 0.00037698769503613505
+        }
+      ],
+      "combined_evaluation": {
+        "energy_mean": 9.609165763692298,
+        "energy_spread_independent_runs": 6.0466422439731105e-05,
+        "virial_residual_mean": 0.00022407871121465917,
+        "virial_residual_abs_max": 0.00027128291834088714,
+        "min_effective_sample_size_fraction": 0.35297914520786544,
+        "benchmark_energy": 9.608761748100294,
+        "energy_error": 0.00040401559200375914
+      },
+      "structure_checks": {
+        "traceless_residual": 6.365673891247599e-19,
+        "odd_parity_residual": 0.0,
+        "weyl_covariance_residual": 8.965294651610197e-19,
+        "head_collision_ratio_max_abs": 0.22932648183693008,
+        "profile_collision_identity_residual": 2.8858148509725012e-12
+      }
+    },
+    "su4": {
+      "reference": null,
+      "training_samples": {
+        "sample_count": 16384,
+        "seed": 7700,
+        "proposal_sigma": 1.0,
+        "effective_sample_size": 3281.306875458346
+      },
+      "training_wall_time_seconds": 41.58687120800005,
+      "history": [
+        {
+          "step": 1,
+          "energy": 17.748272179803084,
+          "radial": 9.424800823556158,
+          "angular": 2.054895983440337,
+          "potential": 6.268575372806591,
+          "local_energy_std": 8.002551535633858,
+          "alpha": 0.9993679962940998,
+          "cubic": 0.9421986926084082,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 50,
+          "energy": 17.70842867046014,
+          "radial": 9.243670981483453,
+          "angular": 2.058648560844857,
+          "potential": 6.40610912813183,
+          "local_energy_std": 7.723356394964649,
+          "alpha": 1.0283493993282715,
+          "cubic": 0.9192633373168395,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 100,
+          "energy": 17.691977972843905,
+          "radial": 9.207631142426635,
+          "angular": 2.0697453208789423,
+          "potential": 6.414601509538328,
+          "local_energy_std": 7.618455147884963,
+          "alpha": 1.0643859880875046,
+          "cubic": 0.9147617755255395,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 150,
+          "energy": 17.68431746076129,
+          "radial": 9.206266087545742,
+          "angular": 2.075232785996089,
+          "potential": 6.402818587219458,
+          "local_energy_std": 7.610166640324939,
+          "alpha": 1.086368082142895,
+          "cubic": 0.9143911868870568,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 200,
+          "energy": 17.677142828571846,
+          "radial": 9.1970687982454,
+          "angular": 2.0752404434192195,
+          "potential": 6.404833586907226,
+          "local_energy_std": 7.605879575897852,
+          "alpha": 1.0978701573071752,
+          "cubic": 0.9127259223288218,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 250,
+          "energy": 17.656524306925572,
+          "radial": 9.17749528962947,
+          "angular": 2.074875219396151,
+          "potential": 6.404153797899953,
+          "local_energy_std": 7.648797162471707,
+          "alpha": 1.1060269940573793,
+          "cubic": 0.9119461055171855,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 300,
+          "energy": 17.620187267060306,
+          "radial": 9.140360452841318,
+          "angular": 2.070760298708713,
+          "potential": 6.4090665155102755,
+          "local_energy_std": 7.724380789311242,
+          "alpha": 1.1104540674503496,
+          "cubic": 0.9099208052035686,
+          "coordinate_scale": 1.0
+        }
+      ],
+      "evaluations": [
+        {
+          "energy": 17.699729811454063,
+          "local_energy_std": 7.779026600238731,
+          "sample_count": 65536,
+          "effective_sample_size": 13149.953606715939,
+          "effective_sample_size_fraction": 0.2006523682665396,
+          "seed": 11300,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.229181804694017,
+          "angular": 2.0703952584025647,
+          "potential": 6.40015274835748,
+          "tr_x2": 3.2354387601098438,
+          "tr_x4": 4.782433368302559,
+          "kinetic": 11.299577063096581,
+          "virial_rhs": 22.36517223332008,
+          "virial_residual": 0.23398189287308213,
+          "alpha": 1.1104540674503496,
+          "cubic": 0.9099208052035686,
+          "coordinate_scale": 1.0
+        },
+        {
+          "energy": 17.70589397391452,
+          "local_energy_std": 7.779746140967805,
+          "sample_count": 65536,
+          "effective_sample_size": 13142.530607633598,
+          "effective_sample_size_fraction": 0.20053910228933103,
+          "seed": 11301,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.235096551008366,
+          "angular": 2.070288645553077,
+          "potential": 6.400508777353079,
+          "tr_x2": 3.2356287593427613,
+          "tr_x4": 4.782694397681698,
+          "kinetic": 11.30538519656144,
+          "virial_rhs": 22.366406350069553,
+          "virial_residual": 0.24436404305332715,
+          "alpha": 1.1104540674503496,
+          "cubic": 0.9099208052035686,
+          "coordinate_scale": 1.0
+        },
+        {
+          "energy": 17.716797105049398,
+          "local_energy_std": 7.790580600754855,
+          "sample_count": 65536,
+          "effective_sample_size": 13143.492897030892,
+          "effective_sample_size_fraction": 0.2005537856602614,
+          "seed": 11302,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.245921996045107,
+          "angular": 2.070250477988471,
+          "potential": 6.400624631015821,
+          "tr_x2": 3.2355799478012868,
+          "tr_x4": 4.782834657115178,
+          "kinetic": 11.316172474033579,
+          "virial_rhs": 22.366918576261998,
+          "virial_residual": 0.2654263718051588,
+          "alpha": 1.1104540674503496,
+          "cubic": 0.9099208052035686,
+          "coordinate_scale": 1.0
+        }
+      ],
+      "combined_evaluation": {
+        "energy_mean": 17.70747363013933,
+        "energy_spread_independent_runs": 0.017067293595335542,
+        "virial_residual_mean": 0.24792410257718936,
+        "virial_residual_abs_max": 0.2654263718051588,
+        "min_effective_sample_size_fraction": 0.20053910228933103
+      },
+      "structure_checks": {
+        "traceless_residual": 0.0,
+        "odd_parity_residual": 0.0,
+        "weyl_covariance_residual": 0.0,
+        "head_collision_ratio_max_abs": 0.25851686026761667,
+        "profile_collision_identity_residual": 1.2619086331433493e-11
+      }
+    }
+  },
+  "validation_summary": {
+    "all_checks_passed": false,
+    "checks": {
+      "su2_ess_fraction_gt_min": true,
+      "su2_structure_exact": true,
+      "su2_virial_abs_lt_tol": true,
+      "su2_benchmark_energy_error_lt_tol": true,
+      "su3_ess_fraction_gt_min": true,
+      "su3_structure_exact": true,
+      "su3_virial_abs_lt_tol": true,
+      "su3_benchmark_energy_error_lt_tol": true,
+      "su4_ess_fraction_gt_min": true,
+      "su4_structure_exact": true,
+      "su4_virial_abs_lt_tol": false
+    },
+    "note": "The SU(2)/SU(3) radial finite-difference energies are external benchmarks only.  Training and evaluation use the same flexible Chebyshev ansatz and Sobol-Gaussian importance Monte Carlo estimator for every N."
+  }
+}

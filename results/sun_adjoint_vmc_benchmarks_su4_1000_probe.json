@@ -1,0 +1,256 @@
+{
+  "metadata": {
+    "ansatz": "shared flexible SU(N) Chebyshev spectral impurity",
+    "hamiltonian": "-1/2 Delta_X + 1/2 omega^2 Tr X^2 + g Tr X^4",
+    "omega": 1.0,
+    "coupling": 1.0,
+    "seed": 7300,
+    "n_values": [
+      4
+    ],
+    "energy_abs_tol": 0.0005,
+    "virial_abs_tol": 0.005,
+    "min_ess_fraction": 0.05,
+    "shared_ansatz_config": {
+      "omega_init": 1.0,
+      "quartic_tail_init": 0.9428090415820635,
+      "moment_cutoff": 6,
+      "hidden_layers": [
+        24,
+        24
+      ],
+      "head_hidden_layers": [
+        24
+      ],
+      "chebyshev_degrees": [
+        1,
+        3,
+        5
+      ],
+      "scale_init": 3.0,
+      "learn_scale": false,
+      "action_correction_scale": 0.25,
+      "head_correction_scale": 0.25
+    },
+    "harmonic_exact_energies": {
+      "4": 8.5
+    },
+    "sampler": {
+      "algorithm": "scrambled Sobol Gaussian importance sampling in orthonormal traceless eigenvalue coordinates",
+      "n_train_samples": 16384,
+      "n_eval_samples": 65536,
+      "n_eval_replicates": 3,
+      "proposal_sigma": 2.0,
+      "independent_evaluation_samples": true
+    }
+  },
+  "runs": {
+    "su4": {
+      "reference": null,
+      "training_samples": {
+        "sample_count": 16384,
+        "seed": 7700,
+        "proposal_sigma": 2.0,
+        "effective_sample_size": 1069.099295726298
+      },
+      "training_wall_time_seconds": 126.36633204200007,
+      "history": [
+        {
+          "step": 1,
+          "energy": 17.73857338611408,
+          "radial": 9.41396556019357,
+          "angular": 2.0524727052511467,
+          "potential": 6.272135120669364,
+          "local_energy_std": 8.02305110032203,
+          "alpha": 0.9993679960729781,
+          "cubic": 0.9421986926089843
+        },
+        {
+          "step": 100,
+          "energy": 17.671900943375615,
+          "radial": 9.193547772678002,
+          "angular": 2.0643037001577658,
+          "potential": 6.414049470539846,
+          "local_energy_std": 7.7062295329939365,
+          "alpha": 1.0582491111880987,
+          "cubic": 0.9117350313498491
+        },
+        {
+          "step": 200,
+          "energy": 17.64428299563889,
+          "radial": 9.166931860274863,
+          "angular": 2.071609136701765,
+          "potential": 6.4057419986622595,
+          "local_energy_std": 7.6862788991094995,
+          "alpha": 1.088928300443921,
+          "cubic": 0.9197771025620672
+        },
+        {
+          "step": 300,
+          "energy": 17.57304974400382,
+          "radial": 9.12654691494575,
+          "angular": 2.0665987251321454,
+          "potential": 6.3799041039259246,
+          "local_energy_std": 7.906104123229156,
+          "alpha": 1.10577624550147,
+          "cubic": 0.9314574624935132
+        },
+        {
+          "step": 400,
+          "energy": 17.4211853107555,
+          "radial": 8.98995953871505,
+          "angular": 2.067390963649574,
+          "potential": 6.363834808390876,
+          "local_energy_std": 8.191586422564123,
+          "alpha": 1.11295324579821,
+          "cubic": 0.936542103098844
+        },
+        {
+          "step": 500,
+          "energy": 17.30730776342555,
+          "radial": 8.904455711442903,
+          "angular": 2.065638872151917,
+          "potential": 6.337213179830732,
+          "local_energy_std": 8.700155211766237,
+          "alpha": 1.1073026685579337,
+          "cubic": 0.9409273121562368
+        },
+        {
+          "step": 600,
+          "energy": 17.18997358170929,
+          "radial": 8.786040773195005,
+          "angular": 2.0541574258867183,
+          "potential": 6.3497753826275645,
+          "local_energy_std": 8.98633018187179,
+          "alpha": 1.0889121821340046,
+          "cubic": 0.9405933330263703
+        },
+        {
+          "step": 700,
+          "energy": 17.07092781547048,
+          "radial": 8.651285121119926,
+          "angular": 2.0398911584388406,
+          "potential": 6.379751535911714,
+          "local_energy_std": 9.226148708927212,
+          "alpha": 1.0686017245454615,
+          "cubic": 0.9524624890380122
+        },
+        {
+          "step": 800,
+          "energy": 16.92398948790608,
+          "radial": 8.50091778273483,
+          "angular": 2.0263828161030895,
+          "potential": 6.396688889068154,
+          "local_energy_std": 9.492262168606235,
+          "alpha": 1.0553775361451005,
+          "cubic": 0.9875892782595198
+        },
+        {
+          "step": 900,
+          "energy": 16.74177583283854,
+          "radial": 8.309406161377233,
+          "angular": 2.010727436701701,
+          "potential": 6.421642234759609,
+          "local_energy_std": 9.905766614820312,
+          "alpha": 1.0627201212418507,
+          "cubic": 1.0446263966509082
+        },
+        {
+          "step": 1000,
+          "energy": 16.521793247186963,
+          "radial": 8.08148357696879,
+          "angular": 1.9920174850946244,
+          "potential": 6.448292185123549,
+          "local_energy_std": 10.459682620797306,
+          "alpha": 1.090016359362858,
+          "cubic": 1.1189047640506466
+        }
+      ],
+      "evaluations": [
+        {
+          "energy": 20.01308668863172,
+          "local_energy_std": 21.35629640005496,
+          "sample_count": 65536,
+          "effective_sample_size": 4344.860334062118,
+          "effective_sample_size_fraction": 0.06629730734347715,
+          "seed": 11300,
+          "proposal_sigma": 2.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 11.562567418555322,
+          "angular": 1.9874278802649152,
+          "potential": 6.463091389811483,
+          "tr_x2": 3.298151093360365,
+          "tr_x4": 4.814015843131302,
+          "kinetic": 13.549995298820235,
+          "virial_rhs": 22.554214465885572,
+          "virial_residual": 4.545776131754899,
+          "alpha": 1.090016359362858,
+          "cubic": 1.1189047640506466
+        },
+        {
+          "energy": 20.316746657529364,
+          "local_energy_std": 22.01384605841688,
+          "sample_count": 65536,
+          "effective_sample_size": 4327.304038862483,
+          "effective_sample_size_fraction": 0.06602941953830693,
+          "seed": 11301,
+          "proposal_sigma": 2.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 11.865996711470046,
+          "angular": 1.9867064964969936,
+          "potential": 6.4640434495623245,
+          "tr_x2": 3.2988479612118153,
+          "tr_x4": 4.814619468956416,
+          "kinetic": 13.852703207967041,
+          "virial_rhs": 22.55732583703748,
+          "virial_residual": 5.1480805788966,
+          "alpha": 1.090016359362858,
+          "cubic": 1.1189047640506466
+        },
+        {
+          "energy": 20.447171714931116,
+          "local_energy_std": 21.989380755577937,
+          "sample_count": 65536,
+          "effective_sample_size": 4339.362327974173,
+          "effective_sample_size_fraction": 0.06621341442831685,
+          "seed": 11302,
+          "proposal_sigma": 2.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 12.000119687002627,
+          "angular": 1.9881695582272223,
+          "potential": 6.458882469701267,
+          "tr_x2": 3.296980698561795,
+          "tr_x4": 4.810392120420371,
+          "kinetic": 13.988289245229845,
+          "virial_rhs": 22.53854918024328,
+          "virial_residual": 5.438029310216411,
+          "alpha": 1.090016359362858,
+          "cubic": 1.1189047640506466
+        }
+      ],
+      "combined_evaluation": {
+        "energy_mean": 20.259001687030732,
+        "energy_spread_independent_runs": 0.43408502629939605,
+        "virial_residual_mean": 5.04396200695597,
+        "virial_residual_abs_max": 5.438029310216411,
+        "min_effective_sample_size_fraction": 0.06602941953830693
+      },
+      "structure_checks": {
+        "traceless_residual": 0.0,
+        "odd_parity_residual": 0.0,
+        "weyl_covariance_residual": 8.673617379884035e-19,
+        "head_collision_ratio_max_abs": 0.06739630266600763,
+        "profile_collision_identity_residual": 2.9278844973501528e-12
+      }
+    }
+  },
+  "validation_summary": {
+    "all_checks_passed": false,
+    "checks": {
+      "su4_ess_fraction_gt_min": true,
+      "su4_structure_exact": true,
+      "su4_virial_abs_lt_tol": false
+    },
+    "note": "The SU(2)/SU(3) radial finite-difference energies are external benchmarks only.  Training and evaluation use the same flexible Chebyshev ansatz and Sobol-Gaussian importance Monte Carlo estimator for every N."
+  }
+}

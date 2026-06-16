@@ -1,0 +1,116 @@
+{
+  "metadata": {
+    "ansatz": "shared flexible SU(N) Chebyshev spectral impurity",
+    "hamiltonian": "-1/2 Delta_X + 1/2 omega^2 Tr X^2 + g Tr X^4",
+    "omega": 1.0,
+    "coupling": 1.0,
+    "seed": 7300,
+    "n_values": [
+      4
+    ],
+    "energy_abs_tol": 1.0,
+    "virial_abs_tol": 10.0,
+    "min_ess_fraction": 0.001,
+    "shared_ansatz_config": {
+      "omega_init": 1.0,
+      "quartic_tail_init": 0.9428090415820635,
+      "moment_cutoff": 6,
+      "hidden_layers": [
+        24,
+        24
+      ],
+      "head_hidden_layers": [
+        24
+      ],
+      "chebyshev_degrees": [
+        1,
+        3,
+        5
+      ],
+      "scale_init": 3.0,
+      "learn_scale": false,
+      "action_correction_scale": 0.25,
+      "head_correction_scale": 0.25
+    },
+    "harmonic_exact_energies": {
+      "4": 8.5
+    },
+    "sampler": {
+      "algorithm": "scrambled Sobol Gaussian importance sampling in orthonormal traceless eigenvalue coordinates",
+      "n_train_samples": 512,
+      "n_eval_samples": 1024,
+      "n_eval_replicates": 1,
+      "proposal_sigma": 2.0,
+      "independent_evaluation_samples": true
+    }
+  },
+  "runs": {
+    "su4": {
+      "reference": null,
+      "training_samples": {
+        "sample_count": 512,
+        "seed": 7700,
+        "proposal_sigma": 2.0,
+        "effective_sample_size": 40.296193995300484
+      },
+      "training_wall_time_seconds": 0.6321419581072405,
+      "history": [
+        {
+          "step": 1,
+          "energy": 17.91819551875238,
+          "radial": 9.548494238621176,
+          "angular": 2.098094396228728,
+          "potential": 6.271606883902475,
+          "local_energy_std": 8.595030540414108,
+          "alpha": 1.0006322368091585,
+          "cubic": 0.9434196283809956
+        }
+      ],
+      "evaluations": [
+        {
+          "energy": 17.513023126570328,
+          "local_energy_std": 7.933587725281206,
+          "sample_count": 1024,
+          "effective_sample_size": 84.59940977651016,
+          "effective_sample_size_fraction": 0.0826166111098732,
+          "seed": 11300,
+          "proposal_sigma": 2.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.31323776350896,
+          "angular": 2.071459159822175,
+          "potential": 6.128326203239193,
+          "tr_x2": 3.191408149472976,
+          "tr_x4": 4.532622128502704,
+          "kinetic": 11.384696923331134,
+          "virial_rhs": 21.321896663483795,
+          "virial_residual": 1.4474971831784735,
+          "alpha": 1.0006322368091585,
+          "cubic": 0.9434196283809956
+        }
+      ],
+      "combined_evaluation": {
+        "energy_mean": 17.513023126570328,
+        "energy_spread_independent_runs": 0.0,
+        "virial_residual_mean": 1.4474971831784735,
+        "virial_residual_abs_max": 1.4474971831784735,
+        "min_effective_sample_size_fraction": 0.0826166111098732
+      },
+      "structure_checks": {
+        "traceless_residual": 0.0,
+        "odd_parity_residual": 0.0,
+        "weyl_covariance_residual": 0.0,
+        "head_collision_ratio_max_abs": 0.33394234386017124,
+        "profile_collision_identity_residual": 2.244766872383508e-11
+      }
+    }
+  },
+  "validation_summary": {
+    "all_checks_passed": true,
+    "checks": {
+      "su4_ess_fraction_gt_min": true,
+      "su4_structure_exact": true,
+      "su4_virial_abs_lt_tol": true
+    },
+    "note": "The SU(2)/SU(3) radial finite-difference energies are external benchmarks only.  Training and evaluation use the same flexible Chebyshev ansatz and Sobol-Gaussian importance Monte Carlo estimator for every N."
+  }
+}

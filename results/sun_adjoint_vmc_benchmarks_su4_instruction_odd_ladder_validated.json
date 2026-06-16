@@ -1,0 +1,1813 @@
+{
+  "metadata": {
+    "ansatz": "shared flexible SU(N) Chebyshev spectral impurity",
+    "hamiltonian": "-1/2 Delta_X + 1/2 omega^2 Tr X^2 + g Tr X^4",
+    "command_line": [
+      "scripts/run_sun_adjoint_vmc_benchmarks.py",
+      "--n-values",
+      "4",
+      "--validated-candidates",
+      "--include-linear-impurity-ladder",
+      "--eval-samples",
+      "131072",
+      "--n-eval-replicates",
+      "3",
+      "--n-samples",
+      "16384",
+      "--n-steps",
+      "1",
+      "--report-every",
+      "1",
+      "--output",
+      "results/sun_adjoint_vmc_benchmarks_su4_instruction_odd_ladder_validated.json"
+    ],
+    "git_commit": "583f54f25d95583b9a7017c9ae5528468864c065",
+    "git_status_short": "M scripts/run_sun_adjoint_vmc_benchmarks.py\n M src/adjoint_qm/__init__.py\n M src/adjoint_qm/adjoint.py\n M tests/test_sun_chebyshev_adjoint.py\n?? tex/Adjoint_QM_SU4_Implementation_Instructions.tex\n?? \"tex/BFSS calculations review.synctex.gz\"\n?? \"tex/BFSS calculations review.tex\"",
+    "python_version": "3.13.2",
+    "torch_version": "2.12.0",
+    "arguments": {
+      "output": "results/sun_adjoint_vmc_benchmarks_su4_instruction_odd_ladder_validated.json",
+      "n_values": [
+        4
+      ],
+      "omega": 1.0,
+      "coupling": 1.0,
+      "seed": 7300,
+      "training_mode": "validated-candidates",
+      "n_steps": 1,
+      "n_samples": 16384,
+      "eval_samples": 131072,
+      "n_eval_replicates": 3,
+      "proposal_sigma": 1.0,
+      "lr": 0.001,
+      "report_every": 1,
+      "envelope_lbfgs_max_iter": 80,
+      "include_linear_impurity_candidate": false,
+      "include_linear_impurity_ladder": true,
+      "include_linear_initialized_neural_candidate": false,
+      "linear_impurity_terms": [
+        "1",
+        "rho",
+        "u",
+        "v",
+        "rho2",
+        "rho_u",
+        "rho_v"
+      ],
+      "linear_impurity_overlap_rtol": 1e-10,
+      "linear_initialized_neural_steps": 40,
+      "linear_initialized_neural_lr": 0.0002,
+      "include_multicloud_candidate": false,
+      "multicloud_steps": 120,
+      "multicloud_clouds_per_step": 2,
+      "multicloud_lr": 0.0005,
+      "feature_mode": "shape_quadratic",
+      "feature_scale_init": 1.0,
+      "learn_feature_scale": false,
+      "parity": "odd",
+      "chebyshev_degrees": null,
+      "learn_coordinate_scale": false,
+      "action_correction_scale": 0.25,
+      "head_correction_scale": 0.25,
+      "head_coefficient_mode": "full",
+      "energy_abs_tol": 0.0005,
+      "energy_spread_abs_tol": 0.002,
+      "virial_abs_tol": 0.005,
+      "min_ess_fraction": 0.05
+    },
+    "omega": 1.0,
+    "coupling": 1.0,
+    "seed": 7300,
+    "n_values": [
+      4
+    ],
+    "training_mode": "validated-candidates",
+    "parity": "odd",
+    "include_linear_impurity_candidate": false,
+    "include_linear_impurity_ladder": true,
+    "include_linear_initialized_neural_candidate": false,
+    "linear_impurity_ladder_specs": [
+      {
+        "name": "linear_ladder_odd_constant_t1",
+        "terms": [
+          "1"
+        ],
+        "chebyshev_degrees": [
+          1
+        ]
+      },
+      {
+        "name": "linear_ladder_odd_shape_t1",
+        "terms": [
+          "1",
+          "rho",
+          "u",
+          "v"
+        ],
+        "chebyshev_degrees": [
+          1
+        ]
+      },
+      {
+        "name": "linear_ladder_odd_shape_t13",
+        "terms": [
+          "1",
+          "rho",
+          "u",
+          "v"
+        ],
+        "chebyshev_degrees": [
+          1,
+          3
+        ]
+      },
+      {
+        "name": "linear_ladder_odd_shape_quadratic_t13",
+        "terms": [
+          "1",
+          "rho",
+          "u",
+          "v",
+          "rho2",
+          "rho_u",
+          "rho_v"
+        ],
+        "chebyshev_degrees": [
+          1,
+          3
+        ]
+      }
+    ],
+    "linear_impurity_terms": [
+      "1",
+      "rho",
+      "u",
+      "v",
+      "rho2",
+      "rho_u",
+      "rho_v"
+    ],
+    "linear_impurity_overlap_rtol": 1e-10,
+    "linear_initialized_neural_steps": 40,
+    "linear_initialized_neural_lr": 0.0002,
+    "include_multicloud_candidate": false,
+    "multicloud_steps": 120,
+    "multicloud_clouds_per_step": 2,
+    "multicloud_lr": 0.0005,
+    "energy_abs_tol": 0.0005,
+    "energy_spread_abs_tol": 0.002,
+    "virial_abs_tol": 0.005,
+    "min_ess_fraction": 0.05,
+    "shared_ansatz_config": {
+      "omega_init": 1.0,
+      "quartic_tail_init": 0.9428090415820635,
+      "moment_cutoff": 6,
+      "feature_mode": "shape_quadratic",
+      "feature_scale_init": 1.0,
+      "learn_feature_scale": false,
+      "hidden_layers": [
+        24,
+        24
+      ],
+      "head_hidden_layers": [
+        24
+      ],
+      "chebyshev_degrees": [
+        1,
+        3
+      ],
+      "parity": "odd",
+      "scale_init": 3.0,
+      "learn_scale": false,
+      "coordinate_scale_init": 1.0,
+      "learn_coordinate_scale": false,
+      "action_correction_scale": 0.25,
+      "head_correction_scale": 0.25,
+      "head_coefficient_mode": "full"
+    },
+    "harmonic_exact_energies": {
+      "4": 8.5
+    },
+    "sampler": {
+      "algorithm": "scrambled Sobol Gaussian importance sampling in orthonormal traceless eigenvalue coordinates",
+      "n_train_samples": 16384,
+      "n_eval_samples": 131072,
+      "n_eval_replicates": 3,
+      "proposal_sigma": 1.0,
+      "independent_evaluation_samples": true
+    }
+  },
+  "runs": {
+    "su4": {
+      "reference": null,
+      "training_samples": {
+        "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+        "warm_start": {
+          "grid": {
+            "type": "midpoint tensor grid in three traceless coordinates",
+            "z_max": 5.5,
+            "n_grid": 34,
+            "point_count": 39304
+          },
+          "wall_time_seconds": 9.119582209001237
+        },
+        "grid": {
+          "type": "midpoint tensor grid in three traceless coordinates",
+          "z_max": 5.5,
+          "n_grid": 34,
+          "point_count": 39304
+        },
+        "linear_impurity_energy": 17.665234888831762,
+        "retained_basis_count": 14,
+        "requested_basis_count": 14,
+        "basis_labels": [
+          "1*T1",
+          "1*T3",
+          "rho*T1",
+          "rho*T3",
+          "u*T1",
+          "u*T3",
+          "v*T1",
+          "v*T3",
+          "rho2*T1",
+          "rho2*T3",
+          "rho_u*T1",
+          "rho_u*T3",
+          "rho_v*T1",
+          "rho_v*T3"
+        ],
+        "coefficients": [
+          {
+            "basis": "1*T1",
+            "coefficient": -0.1773193981527795
+          },
+          {
+            "basis": "1*T3",
+            "coefficient": -0.11546969473625189
+          },
+          {
+            "basis": "rho*T1",
+            "coefficient": 0.20806829352238027
+          },
+          {
+            "basis": "rho*T3",
+            "coefficient": 0.08359182726336435
+          },
+          {
+            "basis": "u*T1",
+            "coefficient": 0.4449610846295572
+          },
+          {
+            "basis": "u*T3",
+            "coefficient": 0.16317764913631888
+          },
+          {
+            "basis": "v*T1",
+            "coefficient": -0.4309867569955157
+          },
+          {
+            "basis": "v*T3",
+            "coefficient": -0.16298674850935296
+          },
+          {
+            "basis": "rho2*T1",
+            "coefficient": -0.021112953935046735
+          },
+          {
+            "basis": "rho2*T3",
+            "coefficient": -0.011551233220121384
+          },
+          {
+            "basis": "rho_u*T1",
+            "coefficient": -0.29948353748701234
+          },
+          {
+            "basis": "rho_u*T3",
+            "coefficient": -0.11772867177963894
+          },
+          {
+            "basis": "rho_v*T1",
+            "coefficient": 0.2531568590949269
+          },
+          {
+            "basis": "rho_v*T3",
+            "coefficient": 0.09488513026753688
+          }
+        ],
+        "lowest_eigenvalues": [
+          17.665234888831762,
+          22.747438890442407,
+          23.867728426272695,
+          28.35755939933483,
+          29.454404353073546,
+          30.53997261746083
+        ],
+        "overlap_eigenvalue_min": 6.698912497550084e-06,
+        "overlap_eigenvalue_max": 2835.459386305517,
+        "overlap_rtol": 1e-10,
+        "linear_solve_wall_time_seconds": 1.4527722500060918,
+        "wall_time_seconds": 10.572354459007329,
+        "basis_ladder_index": 3,
+        "previous_ladder_grid_energy": 17.665722824336825,
+        "grid_energy_improvement_from_previous": 0.0004879355050633194
+      },
+      "training_wall_time_seconds": 10.572354459007329,
+      "selected_candidate": "linear_ladder_odd_shape_quadratic_t13",
+      "selected_candidate_passes_validation_gates": true,
+      "candidate_summaries": {
+        "importance_adam_full_flexible": {
+          "passes_validation_gates": false,
+          "combined_evaluation": {
+            "energy_mean": 17.7299021435219,
+            "energy_spread_independent_runs": 0.0001302126367370704,
+            "virial_residual_mean": 1.8637025339875137,
+            "virial_residual_abs_max": 1.863739521275079,
+            "min_effective_sample_size_fraction": 0.19119270845401906
+          },
+          "training": {
+            "method": "fixed-proposal Adam on the full flexible ansatz",
+            "sample_count": 16384,
+            "seed": 7700,
+            "proposal_sigma": 1.0,
+            "effective_sample_size": 3127.3746436321894,
+            "wall_time_seconds": 0.7915325840003788
+          }
+        },
+        "envelope_quadrature_lbfgs": {
+          "passes_validation_gates": true,
+          "combined_evaluation": {
+            "energy_mean": 17.67081351339961,
+            "energy_spread_independent_runs": 0.00012723491231625417,
+            "virial_residual_mean": -3.0496497454161425e-05,
+            "virial_residual_abs_max": 0.00011797212710007443,
+            "min_effective_sample_size_fraction": 0.2036573510240279
+          },
+          "training": {
+            "method": "deterministic LBFGS warm start of the alpha/cubic envelope inside the full shared Chebyshev ansatz",
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "wall_time_seconds": 9.598989457997959
+          }
+        },
+        "linear_ladder_odd_constant_t1": {
+          "passes_validation_gates": true,
+          "combined_evaluation": {
+            "energy_mean": 17.67081351339962,
+            "energy_spread_independent_runs": 0.00012723491231270145,
+            "virial_residual_mean": -3.0496497457714138e-05,
+            "virial_residual_abs_max": 0.00011797212710717986,
+            "min_effective_sample_size_fraction": 0.20365735102402796
+          },
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.670688514489804,
+            "retained_basis_count": 1,
+            "requested_basis_count": 1,
+            "basis_labels": [
+              "1*T1"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": 0.13630687542392317
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.670688514489804
+            ],
+            "overlap_eigenvalue_min": 53.82257541178532,
+            "overlap_eigenvalue_max": 53.82257541178532,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 0.06068483299895888,
+            "wall_time_seconds": 9.180267042000196,
+            "basis_ladder_index": 0,
+            "previous_ladder_grid_energy": null,
+            "grid_energy_improvement_from_previous": null
+          }
+        },
+        "linear_ladder_odd_shape_t1": {
+          "passes_validation_gates": false,
+          "combined_evaluation": {
+            "energy_mean": 17.670607833909795,
+            "energy_spread_independent_runs": 0.00013599990150936492,
+            "virial_residual_mean": -0.020520520472054216,
+            "virial_residual_abs_max": 0.020608252391077997,
+            "min_effective_sample_size_fraction": 0.2039044098315848
+          },
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.670485160579553,
+            "retained_basis_count": 4,
+            "requested_basis_count": 4,
+            "basis_labels": [
+              "1*T1",
+              "rho*T1",
+              "u*T1",
+              "v*T1"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": 0.13174038897615434
+              },
+              {
+                "basis": "rho*T1",
+                "coefficient": -1.9395354980938927e-05
+              },
+              {
+                "basis": "u*T1",
+                "coefficient": 0.01109898389333925
+              },
+              {
+                "basis": "v*T1",
+                "coefficient": -0.0022387722505521706
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.670485160579553,
+              23.862237434936873,
+              29.06382002170668,
+              36.987639773133516
+            ],
+            "overlap_eigenvalue_min": 0.03898697231088694,
+            "overlap_eigenvalue_max": 173.13728884190982,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 0.2380595419963356,
+            "wall_time_seconds": 9.357641750997573,
+            "basis_ladder_index": 1,
+            "previous_ladder_grid_energy": 17.670688514489804,
+            "grid_energy_improvement_from_previous": 0.00020335391025128047
+          }
+        },
+        "linear_ladder_odd_shape_t13": {
+          "passes_validation_gates": false,
+          "combined_evaluation": {
+            "energy_mean": 17.665831669577795,
+            "energy_spread_independent_runs": 0.00012343817290627612,
+            "virial_residual_mean": 0.029425321255493724,
+            "virial_residual_abs_max": 0.02946185786984401,
+            "min_effective_sample_size_fraction": 0.20257723790150386
+          },
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.665722824336825,
+            "retained_basis_count": 8,
+            "requested_basis_count": 8,
+            "basis_labels": [
+              "1*T1",
+              "1*T3",
+              "rho*T1",
+              "rho*T3",
+              "u*T1",
+              "u*T3",
+              "v*T1",
+              "v*T3"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": 0.040355898781982084
+              },
+              {
+                "basis": "1*T3",
+                "coefficient": -0.024937293069252
+              },
+              {
+                "basis": "rho*T1",
+                "coefficient": 0.03671153244386557
+              },
+              {
+                "basis": "rho*T3",
+                "coefficient": 0.007705909399050635
+              },
+              {
+                "basis": "u*T1",
+                "coefficient": -0.02862082830634824
+              },
+              {
+                "basis": "u*T3",
+                "coefficient": -0.021947167363101566
+              },
+              {
+                "basis": "v*T1",
+                "coefficient": -0.015606759316565653
+              },
+              {
+                "basis": "v*T3",
+                "coefficient": -0.006012666205036174
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.665722824336825,
+              22.79982465306671,
+              23.906372232615972,
+              29.175256536300342,
+              30.473726335298696,
+              34.66757910772358
+            ],
+            "overlap_eigenvalue_min": 0.00039999425039521317,
+            "overlap_eigenvalue_max": 1147.2801426349445,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 0.5704702500006533,
+            "wall_time_seconds": 9.69005245900189,
+            "basis_ladder_index": 2,
+            "previous_ladder_grid_energy": 17.670485160579553,
+            "grid_energy_improvement_from_previous": 0.004762336242727372
+          }
+        },
+        "linear_ladder_odd_shape_quadratic_t13": {
+          "passes_validation_gates": true,
+          "combined_evaluation": {
+            "energy_mean": 17.665540020352797,
+            "energy_spread_independent_runs": 0.00012256622925832517,
+            "virial_residual_mean": -0.0015092286933189314,
+            "virial_residual_abs_max": 0.0015678240120955422,
+            "min_effective_sample_size_fraction": 0.20307011120608168
+          },
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.665234888831762,
+            "retained_basis_count": 14,
+            "requested_basis_count": 14,
+            "basis_labels": [
+              "1*T1",
+              "1*T3",
+              "rho*T1",
+              "rho*T3",
+              "u*T1",
+              "u*T3",
+              "v*T1",
+              "v*T3",
+              "rho2*T1",
+              "rho2*T3",
+              "rho_u*T1",
+              "rho_u*T3",
+              "rho_v*T1",
+              "rho_v*T3"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": -0.1773193981527795
+              },
+              {
+                "basis": "1*T3",
+                "coefficient": -0.11546969473625189
+              },
+              {
+                "basis": "rho*T1",
+                "coefficient": 0.20806829352238027
+              },
+              {
+                "basis": "rho*T3",
+                "coefficient": 0.08359182726336435
+              },
+              {
+                "basis": "u*T1",
+                "coefficient": 0.4449610846295572
+              },
+              {
+                "basis": "u*T3",
+                "coefficient": 0.16317764913631888
+              },
+              {
+                "basis": "v*T1",
+                "coefficient": -0.4309867569955157
+              },
+              {
+                "basis": "v*T3",
+                "coefficient": -0.16298674850935296
+              },
+              {
+                "basis": "rho2*T1",
+                "coefficient": -0.021112953935046735
+              },
+              {
+                "basis": "rho2*T3",
+                "coefficient": -0.011551233220121384
+              },
+              {
+                "basis": "rho_u*T1",
+                "coefficient": -0.29948353748701234
+              },
+              {
+                "basis": "rho_u*T3",
+                "coefficient": -0.11772867177963894
+              },
+              {
+                "basis": "rho_v*T1",
+                "coefficient": 0.2531568590949269
+              },
+              {
+                "basis": "rho_v*T3",
+                "coefficient": 0.09488513026753688
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.665234888831762,
+              22.747438890442407,
+              23.867728426272695,
+              28.35755939933483,
+              29.454404353073546,
+              30.53997261746083
+            ],
+            "overlap_eigenvalue_min": 6.698912497550084e-06,
+            "overlap_eigenvalue_max": 2835.459386305517,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 1.4527722500060918,
+            "wall_time_seconds": 10.572354459007329,
+            "basis_ladder_index": 3,
+            "previous_ladder_grid_energy": 17.665722824336825,
+            "grid_energy_improvement_from_previous": 0.0004879355050633194
+          }
+        }
+      },
+      "candidates": [
+        {
+          "name": "importance_adam_full_flexible",
+          "training": {
+            "method": "fixed-proposal Adam on the full flexible ansatz",
+            "sample_count": 16384,
+            "seed": 7700,
+            "proposal_sigma": 1.0,
+            "effective_sample_size": 3127.3746436321894,
+            "wall_time_seconds": 0.7915325840003788
+          },
+          "history": [
+            {
+              "step": 1,
+              "energy": 17.752256283190434,
+              "radial": 9.534343033708849,
+              "angular": 2.079003084859556,
+              "potential": 6.138910164622029,
+              "local_energy_std": 7.991869587777035,
+              "alpha": 0.9993679958176903,
+              "cubic": 0.9421986925961795,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "evaluations": [
+            {
+              "energy": 17.729881724308733,
+              "local_energy_std": 7.961052089432948,
+              "sample_count": 131072,
+              "effective_sample_size": 25060.010682485186,
+              "effective_sample_size_fraction": 0.19119270845401906,
+              "seed": 11300,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.521144479354113,
+              "angular": 2.0781919625316134,
+              "potential": 6.1305452824230064,
+              "tr_x2": 3.187201584373923,
+              "tr_x4": 4.536944490236045,
+              "kinetic": 11.599336441885725,
+              "virial_rhs": 21.334979545318102,
+              "virial_residual": 1.8636933384533485,
+              "alpha": 0.9993679958176903,
+              "cubic": 0.9421986925961795,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.72984724681012,
+              "local_energy_std": 7.960932310063791,
+              "sample_count": 131072,
+              "effective_sample_size": 25062.61795098375,
+              "effective_sample_size_fraction": 0.1912126003340435,
+              "seed": 11301,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.52115260070927,
+              "angular": 2.0781605687040314,
+              "potential": 6.13053407739682,
+              "tr_x2": 3.187249492035761,
+              "tr_x4": 4.536909331378941,
+              "kinetic": 11.599313169413302,
+              "virial_rhs": 21.334886817551524,
+              "virial_residual": 1.863739521275079,
+              "alpha": 0.9993679958176903,
+              "cubic": 0.9421986925961795,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.729977459446857,
+              "local_energy_std": 7.96109537288253,
+              "sample_count": 131072,
+              "effective_sample_size": 25061.40074298793,
+              "effective_sample_size_fraction": 0.1912033137740168,
+              "seed": 11302,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.521194377628092,
+              "angular": 2.078202841374406,
+              "potential": 6.130580240444362,
+              "tr_x2": 3.1872012660065736,
+              "tr_x4": 4.536979607441076,
+              "kinetic": 11.599397219002496,
+              "virial_rhs": 21.335119695770878,
+              "virial_residual": 1.8636747422341138,
+              "alpha": 0.9993679958176903,
+              "cubic": 0.9421986925961795,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "combined_evaluation": {
+            "energy_mean": 17.7299021435219,
+            "energy_spread_independent_runs": 0.0001302126367370704,
+            "virial_residual_mean": 1.8637025339875137,
+            "virial_residual_abs_max": 1.863739521275079,
+            "min_effective_sample_size_fraction": 0.19119270845401906
+          },
+          "structure_checks": {
+            "parity": "odd",
+            "traceless_residual": 0.0,
+            "parity_residual": 0.0,
+            "odd_parity_residual": 0.0,
+            "weyl_covariance_residual": 0.0,
+            "head_collision_ratio_max_abs": 0.33171904842482636,
+            "profile_collision_identity_residual": 7.84436404721589e-12
+          },
+          "passes_validation_gates": false
+        },
+        {
+          "name": "envelope_quadrature_lbfgs",
+          "training": {
+            "method": "deterministic LBFGS warm start of the alpha/cubic envelope inside the full shared Chebyshev ansatz",
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "wall_time_seconds": 9.598989457997959
+          },
+          "history": [
+            {
+              "step": 80,
+              "energy": 17.6706885144898,
+              "radial": 9.177433717174534,
+              "angular": 2.063021130143167,
+              "potential": 6.4302336671721,
+              "local_energy_std": 7.567435869580528,
+              "virial_residual": 1.5223075646275674e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "evaluations": [
+            {
+              "energy": 17.67073749072552,
+              "local_energy_std": 7.567273383791043,
+              "sample_count": 131072,
+              "effective_sample_size": 26693.776313421386,
+              "effective_sample_size_fraction": 0.2036573510240279,
+              "seed": 11300,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.17747038186001,
+              "angular": 2.063012032958848,
+              "potential": 6.430255075906667,
+              "tr_x2": 3.240049582888624,
+              "tr_x4": 4.810230284462356,
+              "kinetic": 11.240482414818858,
+              "virial_rhs": 22.480970720738046,
+              "virial_residual": -5.891100329336041e-06,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.670838323835483,
+              "local_energy_std": 7.567355476325872,
+              "sample_count": 131072,
+              "effective_sample_size": 26694.731594988258,
+              "effective_sample_size_fraction": 0.20366463924399,
+              "seed": 11301,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.177564558767529,
+              "angular": 2.062984444871865,
+              "potential": 6.430289320196092,
+              "tr_x2": 3.2400916472406434,
+              "tr_x4": 4.81024349657577,
+              "kinetic": 11.240549003639394,
+              "virial_rhs": 22.48106563354372,
+              "virial_residual": 3.23737350669262e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.670864725637838,
+              "local_energy_std": 7.56729471566726,
+              "sample_count": 131072,
+              "effective_sample_size": 26694.710401843447,
+              "effective_sample_size_fraction": 0.2036644775531269,
+              "seed": 11302,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.177530141562311,
+              "angular": 2.063017222871229,
+              "potential": 6.4303173612043,
+              "tr_x2": 3.2400567438230174,
+              "tr_x4": 4.810288989292791,
+              "kinetic": 11.24054736443354,
+              "virial_rhs": 22.48121270099418,
+              "virial_residual": -0.00011797212710007443,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "combined_evaluation": {
+            "energy_mean": 17.67081351339961,
+            "energy_spread_independent_runs": 0.00012723491231625417,
+            "virial_residual_mean": -3.0496497454161425e-05,
+            "virial_residual_abs_max": 0.00011797212710007443,
+            "min_effective_sample_size_fraction": 0.2036573510240279
+          },
+          "structure_checks": {
+            "parity": "odd",
+            "traceless_residual": 0.0,
+            "parity_residual": 0.0,
+            "odd_parity_residual": 0.0,
+            "weyl_covariance_residual": 0.0,
+            "head_collision_ratio_max_abs": 0.3333333335183705,
+            "profile_collision_identity_residual": 4.316998841735753e-11
+          },
+          "passes_validation_gates": true
+        },
+        {
+          "name": "linear_ladder_odd_constant_t1",
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.670688514489804,
+            "retained_basis_count": 1,
+            "requested_basis_count": 1,
+            "basis_labels": [
+              "1*T1"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": 0.13630687542392317
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.670688514489804
+            ],
+            "overlap_eigenvalue_min": 53.82257541178532,
+            "overlap_eigenvalue_max": 53.82257541178532,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 0.06068483299895888,
+            "wall_time_seconds": 9.180267042000196,
+            "basis_ladder_index": 0,
+            "previous_ladder_grid_energy": null,
+            "grid_energy_improvement_from_previous": null
+          },
+          "history": [
+            {
+              "step": 80,
+              "energy": 17.6706885144898,
+              "radial": 9.177433717174534,
+              "angular": 2.063021130143167,
+              "potential": 6.4302336671721,
+              "local_energy_std": 7.567435869580528,
+              "virial_residual": 1.5223075646275674e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "step": 81,
+              "energy": 17.670688514489804,
+              "radial": 9.177433717174537,
+              "angular": 2.063021130143167,
+              "potential": 6.430233667172101,
+              "local_energy_std": 7.567435869580528,
+              "virial_residual": 1.5223075656933815e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0,
+              "linear_impurity_energy": 17.670688514489804
+            }
+          ],
+          "evaluations": [
+            {
+              "energy": 17.670737490725525,
+              "local_energy_std": 7.567273383791043,
+              "sample_count": 131072,
+              "effective_sample_size": 26693.776313421393,
+              "effective_sample_size_fraction": 0.20365735102402796,
+              "seed": 11300,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.177470381860008,
+              "angular": 2.0630120329588477,
+              "potential": 6.4302550759066675,
+              "tr_x2": 3.240049582888624,
+              "tr_x4": 4.810230284462355,
+              "kinetic": 11.240482414818857,
+              "virial_rhs": 22.480970720738043,
+              "virial_residual": -5.891100329336041e-06,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.670838323835486,
+              "local_energy_std": 7.567355476325872,
+              "sample_count": 131072,
+              "effective_sample_size": 26694.731594988258,
+              "effective_sample_size_fraction": 0.20366463924399,
+              "seed": 11301,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.177564558767529,
+              "angular": 2.0629844448718644,
+              "potential": 6.430289320196091,
+              "tr_x2": 3.240091647240644,
+              "tr_x4": 4.81024349657577,
+              "kinetic": 11.240549003639392,
+              "virial_rhs": 22.48106563354372,
+              "virial_residual": 3.237373506337349e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.670864725637838,
+              "local_energy_std": 7.56729471566726,
+              "sample_count": 131072,
+              "effective_sample_size": 26694.710401843447,
+              "effective_sample_size_fraction": 0.2036644775531269,
+              "seed": 11302,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.177530141562311,
+              "angular": 2.063017222871229,
+              "potential": 6.4303173612043,
+              "tr_x2": 3.2400567438230174,
+              "tr_x4": 4.810288989292792,
+              "kinetic": 11.240547364433539,
+              "virial_rhs": 22.481212700994185,
+              "virial_residual": -0.00011797212710717986,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "combined_evaluation": {
+            "energy_mean": 17.67081351339962,
+            "energy_spread_independent_runs": 0.00012723491231270145,
+            "virial_residual_mean": -3.0496497457714138e-05,
+            "virial_residual_abs_max": 0.00011797212710717986,
+            "min_effective_sample_size_fraction": 0.20365735102402796
+          },
+          "structure_checks": {
+            "parity": "odd",
+            "traceless_residual": 0.0,
+            "parity_residual": 0.0,
+            "odd_parity_residual": 0.0,
+            "weyl_covariance_residual": 0.0,
+            "head_collision_ratio_max_abs": 0.04543562516624063,
+            "profile_collision_identity_residual": 2.954284386569306e-12
+          },
+          "passes_validation_gates": true
+        },
+        {
+          "name": "linear_ladder_odd_shape_t1",
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.670485160579553,
+            "retained_basis_count": 4,
+            "requested_basis_count": 4,
+            "basis_labels": [
+              "1*T1",
+              "rho*T1",
+              "u*T1",
+              "v*T1"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": 0.13174038897615434
+              },
+              {
+                "basis": "rho*T1",
+                "coefficient": -1.9395354980938927e-05
+              },
+              {
+                "basis": "u*T1",
+                "coefficient": 0.01109898389333925
+              },
+              {
+                "basis": "v*T1",
+                "coefficient": -0.0022387722505521706
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.670485160579553,
+              23.862237434936873,
+              29.06382002170668,
+              36.987639773133516
+            ],
+            "overlap_eigenvalue_min": 0.03898697231088694,
+            "overlap_eigenvalue_max": 173.13728884190982,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 0.2380595419963356,
+            "wall_time_seconds": 9.357641750997573,
+            "basis_ladder_index": 1,
+            "previous_ladder_grid_energy": 17.670688514489804,
+            "grid_energy_improvement_from_previous": 0.00020335391025128047
+          },
+          "history": [
+            {
+              "step": 80,
+              "energy": 17.6706885144898,
+              "radial": 9.177433717174534,
+              "angular": 2.063021130143167,
+              "potential": 6.4302336671721,
+              "local_energy_std": 7.567435869580528,
+              "virial_residual": 1.5223075646275674e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "step": 81,
+              "energy": 17.670485160579574,
+              "radial": 9.17358495376616,
+              "angular": 2.063430149306609,
+              "potential": 6.4334700575068045,
+              "local_energy_std": 7.569451032854608,
+              "virial_residual": -0.020459144782364547,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0,
+              "linear_impurity_energy": 17.670485160579553
+            }
+          ],
+          "evaluations": [
+            {
+              "energy": 17.670525782415446,
+              "local_energy_std": 7.569292682008637,
+              "sample_count": 131072,
+              "effective_sample_size": 26726.158805445484,
+              "effective_sample_size_fraction": 0.2039044098315848,
+              "seed": 11300,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.173619196913215,
+              "angular": 2.0634161628300047,
+              "potential": 6.433490422672223,
+              "tr_x2": 3.2394004707965185,
+              "tr_x4": 4.813790187273964,
+              "kinetic": 11.23703535974322,
+              "virial_rhs": 22.494561219892375,
+              "virial_residual": -0.020490500405934142,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.670635936996987,
+              "local_energy_std": 7.56938144903929,
+              "sample_count": 131072,
+              "effective_sample_size": 26726.937303984643,
+              "effective_sample_size_fraction": 0.20391034930408206,
+              "seed": 11301,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.173718572515964,
+              "angular": 2.063387695887237,
+              "potential": 6.433529668593789,
+              "tr_x2": 3.239443328949614,
+              "tr_x4": 4.813808004118983,
+              "kinetic": 11.237106268403199,
+              "virial_rhs": 22.49467534542555,
+              "virial_residual": -0.020462808619150508,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.670661782316955,
+              "local_energy_std": 7.569315599476226,
+              "sample_count": 131072,
+              "effective_sample_size": 26727.06254774085,
+              "effective_sample_size_fraction": 0.20391130483811074,
+              "seed": 11302,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.17368422270743,
+              "angular": 2.0634208059371297,
+              "potential": 6.433556753672397,
+              "tr_x2": 3.239408705009386,
+              "tr_x4": 4.813852401167702,
+              "kinetic": 11.237105028644558,
+              "virial_rhs": 22.494818309680195,
+              "virial_residual": -0.020608252391077997,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "combined_evaluation": {
+            "energy_mean": 17.670607833909795,
+            "energy_spread_independent_runs": 0.00013599990150936492,
+            "virial_residual_mean": -0.020520520472054216,
+            "virial_residual_abs_max": 0.020608252391077997,
+            "min_effective_sample_size_fraction": 0.2039044098315848
+          },
+          "structure_checks": {
+            "parity": "odd",
+            "traceless_residual": 0.0,
+            "parity_residual": 0.0,
+            "odd_parity_residual": 0.0,
+            "weyl_covariance_residual": 0.0,
+            "head_collision_ratio_max_abs": 0.04483136220747935,
+            "profile_collision_identity_residual": 5.8341604117218004e-12
+          },
+          "passes_validation_gates": false
+        },
+        {
+          "name": "linear_ladder_odd_shape_t13",
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.665722824336825,
+            "retained_basis_count": 8,
+            "requested_basis_count": 8,
+            "basis_labels": [
+              "1*T1",
+              "1*T3",
+              "rho*T1",
+              "rho*T3",
+              "u*T1",
+              "u*T3",
+              "v*T1",
+              "v*T3"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": 0.040355898781982084
+              },
+              {
+                "basis": "1*T3",
+                "coefficient": -0.024937293069252
+              },
+              {
+                "basis": "rho*T1",
+                "coefficient": 0.03671153244386557
+              },
+              {
+                "basis": "rho*T3",
+                "coefficient": 0.007705909399050635
+              },
+              {
+                "basis": "u*T1",
+                "coefficient": -0.02862082830634824
+              },
+              {
+                "basis": "u*T3",
+                "coefficient": -0.021947167363101566
+              },
+              {
+                "basis": "v*T1",
+                "coefficient": -0.015606759316565653
+              },
+              {
+                "basis": "v*T3",
+                "coefficient": -0.006012666205036174
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.665722824336825,
+              22.79982465306671,
+              23.906372232615972,
+              29.175256536300342,
+              30.473726335298696,
+              34.66757910772358
+            ],
+            "overlap_eigenvalue_min": 0.00039999425039521317,
+            "overlap_eigenvalue_max": 1147.2801426349445,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 0.5704702500006533,
+            "wall_time_seconds": 9.69005245900189,
+            "basis_ladder_index": 2,
+            "previous_ladder_grid_energy": 17.670485160579553,
+            "grid_energy_improvement_from_previous": 0.004762336242727372
+          },
+          "history": [
+            {
+              "step": 80,
+              "energy": 17.6706885144898,
+              "radial": 9.177433717174534,
+              "angular": 2.063021130143167,
+              "potential": 6.4302336671721,
+              "local_energy_std": 7.567435869580528,
+              "virial_residual": 1.5223075646275674e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "step": 81,
+              "energy": 17.66572282433685,
+              "radial": 9.172012701056621,
+              "angular": 2.0698699069541937,
+              "potential": 6.423840216326037,
+              "local_energy_std": 7.59469930775449,
+              "virial_residual": 0.02951961439191564,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0,
+              "linear_impurity_energy": 17.665722824336825
+            }
+          ],
+          "evaluations": [
+            {
+              "energy": 17.665765374796266,
+              "local_energy_std": 7.594547769315717,
+              "sample_count": 131072,
+              "effective_sample_size": 26552.203726225915,
+              "effective_sample_size_fraction": 0.20257723790150386,
+              "seed": 11300,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.172052270868008,
+              "angular": 2.069847202754553,
+              "potential": 6.423865901173704,
+              "tr_x2": 3.2411265153195408,
+              "tr_x4": 4.803302643513934,
+              "kinetic": 11.24189947362256,
+              "virial_rhs": 22.454337089375276,
+              "virial_residual": 0.02946185786984401,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.66584082096795,
+              "local_energy_std": 7.59462815992146,
+              "sample_count": 131072,
+              "effective_sample_size": 26552.989405851804,
+              "effective_sample_size_fraction": 0.20258323216134494,
+              "seed": 11301,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.172133865999484,
+              "angular": 2.0698076337855515,
+              "potential": 6.423899321182915,
+              "tr_x2": 3.2411697245444193,
+              "tr_x4": 4.803314458910707,
+              "kinetic": 11.241941499785035,
+              "virial_rhs": 22.45442756018725,
+              "virial_residual": 0.029455439382822135,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.665888812969172,
+              "local_energy_std": 7.5945775459678035,
+              "sample_count": 131072,
+              "effective_sample_size": 26553.143733008023,
+              "effective_sample_size_fraction": 0.20258440958410662,
+              "seed": 11302,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.172111406683673,
+              "angular": 2.069852111650741,
+              "potential": 6.423925294634756,
+              "tr_x2": 3.2411328083840067,
+              "tr_x4": 4.803358890442753,
+              "kinetic": 11.241963518334416,
+              "virial_rhs": 22.454568370155016,
+              "virial_residual": 0.029358666513815024,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "combined_evaluation": {
+            "energy_mean": 17.665831669577795,
+            "energy_spread_independent_runs": 0.00012343817290627612,
+            "virial_residual_mean": 0.029425321255493724,
+            "virial_residual_abs_max": 0.02946185786984401,
+            "min_effective_sample_size_fraction": 0.20257723790150386
+          },
+          "structure_checks": {
+            "parity": "odd",
+            "traceless_residual": 0.0,
+            "parity_residual": 0.0,
+            "odd_parity_residual": 0.0,
+            "weyl_covariance_residual": 0.0,
+            "head_collision_ratio_max_abs": 0.04160371385244563,
+            "profile_collision_identity_residual": 7.455574352333016e-12
+          },
+          "passes_validation_gates": false
+        },
+        {
+          "name": "linear_ladder_odd_shape_quadratic_t13",
+          "training": {
+            "method": "envelope LBFGS warm start followed by a linear impurity generalized eigenproblem",
+            "warm_start": {
+              "grid": {
+                "type": "midpoint tensor grid in three traceless coordinates",
+                "z_max": 5.5,
+                "n_grid": 34,
+                "point_count": 39304
+              },
+              "wall_time_seconds": 9.119582209001237
+            },
+            "grid": {
+              "type": "midpoint tensor grid in three traceless coordinates",
+              "z_max": 5.5,
+              "n_grid": 34,
+              "point_count": 39304
+            },
+            "linear_impurity_energy": 17.665234888831762,
+            "retained_basis_count": 14,
+            "requested_basis_count": 14,
+            "basis_labels": [
+              "1*T1",
+              "1*T3",
+              "rho*T1",
+              "rho*T3",
+              "u*T1",
+              "u*T3",
+              "v*T1",
+              "v*T3",
+              "rho2*T1",
+              "rho2*T3",
+              "rho_u*T1",
+              "rho_u*T3",
+              "rho_v*T1",
+              "rho_v*T3"
+            ],
+            "coefficients": [
+              {
+                "basis": "1*T1",
+                "coefficient": -0.1773193981527795
+              },
+              {
+                "basis": "1*T3",
+                "coefficient": -0.11546969473625189
+              },
+              {
+                "basis": "rho*T1",
+                "coefficient": 0.20806829352238027
+              },
+              {
+                "basis": "rho*T3",
+                "coefficient": 0.08359182726336435
+              },
+              {
+                "basis": "u*T1",
+                "coefficient": 0.4449610846295572
+              },
+              {
+                "basis": "u*T3",
+                "coefficient": 0.16317764913631888
+              },
+              {
+                "basis": "v*T1",
+                "coefficient": -0.4309867569955157
+              },
+              {
+                "basis": "v*T3",
+                "coefficient": -0.16298674850935296
+              },
+              {
+                "basis": "rho2*T1",
+                "coefficient": -0.021112953935046735
+              },
+              {
+                "basis": "rho2*T3",
+                "coefficient": -0.011551233220121384
+              },
+              {
+                "basis": "rho_u*T1",
+                "coefficient": -0.29948353748701234
+              },
+              {
+                "basis": "rho_u*T3",
+                "coefficient": -0.11772867177963894
+              },
+              {
+                "basis": "rho_v*T1",
+                "coefficient": 0.2531568590949269
+              },
+              {
+                "basis": "rho_v*T3",
+                "coefficient": 0.09488513026753688
+              }
+            ],
+            "lowest_eigenvalues": [
+              17.665234888831762,
+              22.747438890442407,
+              23.867728426272695,
+              28.35755939933483,
+              29.454404353073546,
+              30.53997261746083
+            ],
+            "overlap_eigenvalue_min": 6.698912497550084e-06,
+            "overlap_eigenvalue_max": 2835.459386305517,
+            "overlap_rtol": 1e-10,
+            "linear_solve_wall_time_seconds": 1.4527722500060918,
+            "wall_time_seconds": 10.572354459007329,
+            "basis_ladder_index": 3,
+            "previous_ladder_grid_energy": 17.665722824336825,
+            "grid_energy_improvement_from_previous": 0.0004879355050633194
+          },
+          "history": [
+            {
+              "step": 80,
+              "energy": 17.6706885144898,
+              "radial": 9.177433717174534,
+              "angular": 2.063021130143167,
+              "potential": 6.4302336671721,
+              "local_energy_std": 7.567435869580528,
+              "virial_residual": 1.5223075646275674e-05,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "step": 81,
+              "energy": 17.66523488883382,
+              "radial": 9.167011047419305,
+              "angular": 2.069105335415317,
+              "potential": 6.429118505999199,
+              "local_energy_std": 7.60588867085308,
+              "virial_residual": -0.0016047711125359854,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0,
+              "linear_impurity_energy": 17.665234888831762
+            }
+          ],
+          "evaluations": [
+            {
+              "energy": 17.665474039909782,
+              "local_energy_std": 7.605562919729628,
+              "sample_count": 131072,
+              "effective_sample_size": 26616.805616003538,
+              "effective_sample_size_fraction": 0.20307011120608168,
+              "seed": 11300,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.167155297241502,
+              "angular": 2.069136951031246,
+              "potential": 6.429181791637034,
+              "tr_x2": 3.2426612141569517,
+              "tr_x4": 4.807851184558557,
+              "kinetic": 11.23629224827275,
+              "virial_rhs": 22.47406595239118,
+              "virial_residual": -0.001481455845677715,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.665549415009565,
+              "local_energy_std": 7.60561163178383,
+              "sample_count": 131072,
+              "effective_sample_size": 26617.216203137905,
+              "effective_sample_size_fraction": 0.20307324373731922,
+              "seed": 11301,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.16723737405046,
+              "angular": 2.069098550233734,
+              "potential": 6.42921349072537,
+              "tr_x2": 3.242703708110908,
+              "tr_x4": 4.807861636669917,
+              "kinetic": 11.236335924284196,
+              "virial_rhs": 22.474150254790576,
+              "virial_residual": -0.001478406222183537,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            },
+            {
+              "energy": 17.66559660613904,
+              "local_energy_std": 7.605564399687774,
+              "sample_count": 131072,
+              "effective_sample_size": 26617.72581678741,
+              "effective_sample_size_fraction": 0.2030771317809098,
+              "seed": 11302,
+              "proposal_sigma": 1.0,
+              "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+              "radial": 9.167216927162764,
+              "angular": 2.069141685706945,
+              "potential": 6.429237993269332,
+              "tr_x2": 3.24266692332581,
+              "tr_x4": 4.807904531606426,
+              "kinetic": 11.23635861286971,
+              "virial_rhs": 22.474285049751515,
+              "virial_residual": -0.0015678240120955422,
+              "alpha": 1.66429390696382,
+              "cubic": 0.5315787546516278,
+              "coordinate_scale": 1.0
+            }
+          ],
+          "combined_evaluation": {
+            "energy_mean": 17.665540020352797,
+            "energy_spread_independent_runs": 0.00012256622925832517,
+            "virial_residual_mean": -0.0015092286933189314,
+            "virial_residual_abs_max": 0.0015678240120955422,
+            "min_effective_sample_size_fraction": 0.20307011120608168
+          },
+          "structure_checks": {
+            "parity": "odd",
+            "traceless_residual": 0.0,
+            "parity_residual": 0.0,
+            "odd_parity_residual": 0.0,
+            "weyl_covariance_residual": 0.0,
+            "head_collision_ratio_max_abs": 0.04094672494510797,
+            "profile_collision_identity_residual": 4.288422915388335e-12
+          },
+          "passes_validation_gates": true
+        }
+      ],
+      "history": [
+        {
+          "step": 80,
+          "energy": 17.6706885144898,
+          "radial": 9.177433717174534,
+          "angular": 2.063021130143167,
+          "potential": 6.4302336671721,
+          "local_energy_std": 7.567435869580528,
+          "virial_residual": 1.5223075646275674e-05,
+          "alpha": 1.66429390696382,
+          "cubic": 0.5315787546516278,
+          "coordinate_scale": 1.0
+        },
+        {
+          "step": 81,
+          "energy": 17.66523488883382,
+          "radial": 9.167011047419305,
+          "angular": 2.069105335415317,
+          "potential": 6.429118505999199,
+          "local_energy_std": 7.60588867085308,
+          "virial_residual": -0.0016047711125359854,
+          "alpha": 1.66429390696382,
+          "cubic": 0.5315787546516278,
+          "coordinate_scale": 1.0,
+          "linear_impurity_energy": 17.665234888831762
+        }
+      ],
+      "evaluations": [
+        {
+          "energy": 17.665474039909782,
+          "local_energy_std": 7.605562919729628,
+          "sample_count": 131072,
+          "effective_sample_size": 26616.805616003538,
+          "effective_sample_size_fraction": 0.20307011120608168,
+          "seed": 11300,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.167155297241502,
+          "angular": 2.069136951031246,
+          "potential": 6.429181791637034,
+          "tr_x2": 3.2426612141569517,
+          "tr_x4": 4.807851184558557,
+          "kinetic": 11.23629224827275,
+          "virial_rhs": 22.47406595239118,
+          "virial_residual": -0.001481455845677715,
+          "alpha": 1.66429390696382,
+          "cubic": 0.5315787546516278,
+          "coordinate_scale": 1.0
+        },
+        {
+          "energy": 17.665549415009565,
+          "local_energy_std": 7.60561163178383,
+          "sample_count": 131072,
+          "effective_sample_size": 26617.216203137905,
+          "effective_sample_size_fraction": 0.20307324373731922,
+          "seed": 11301,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.16723737405046,
+          "angular": 2.069098550233734,
+          "potential": 6.42921349072537,
+          "tr_x2": 3.242703708110908,
+          "tr_x4": 4.807861636669917,
+          "kinetic": 11.236335924284196,
+          "virial_rhs": 22.474150254790576,
+          "virial_residual": -0.001478406222183537,
+          "alpha": 1.66429390696382,
+          "cubic": 0.5315787546516278,
+          "coordinate_scale": 1.0
+        },
+        {
+          "energy": 17.66559660613904,
+          "local_energy_std": 7.605564399687774,
+          "sample_count": 131072,
+          "effective_sample_size": 26617.72581678741,
+          "effective_sample_size_fraction": 0.2030771317809098,
+          "seed": 11302,
+          "proposal_sigma": 1.0,
+          "proposal": "scrambled Sobol Gaussian in traceless coordinates",
+          "radial": 9.167216927162764,
+          "angular": 2.069141685706945,
+          "potential": 6.429237993269332,
+          "tr_x2": 3.24266692332581,
+          "tr_x4": 4.807904531606426,
+          "kinetic": 11.23635861286971,
+          "virial_rhs": 22.474285049751515,
+          "virial_residual": -0.0015678240120955422,
+          "alpha": 1.66429390696382,
+          "cubic": 0.5315787546516278,
+          "coordinate_scale": 1.0
+        }
+      ],
+      "combined_evaluation": {
+        "energy_mean": 17.665540020352797,
+        "energy_spread_independent_runs": 0.00012256622925832517,
+        "virial_residual_mean": -0.0015092286933189314,
+        "virial_residual_abs_max": 0.0015678240120955422,
+        "min_effective_sample_size_fraction": 0.20307011120608168
+      },
+      "structure_checks": {
+        "parity": "odd",
+        "traceless_residual": 0.0,
+        "parity_residual": 0.0,
+        "odd_parity_residual": 0.0,
+        "weyl_covariance_residual": 0.0,
+        "head_collision_ratio_max_abs": 0.04094672494510797,
+        "profile_collision_identity_residual": 4.288422915388335e-12
+      },
+      "linear_ladder_summary": {
+        "rung_names": [
+          "linear_ladder_odd_constant_t1",
+          "linear_ladder_odd_shape_t1",
+          "linear_ladder_odd_shape_t13",
+          "linear_ladder_odd_shape_quadratic_t13"
+        ],
+        "grid_energies": [
+          17.670688514489804,
+          17.670485160579553,
+          17.665722824336825,
+          17.665234888831762
+        ],
+        "grid_energy_monotone_nonincreasing": true,
+        "independent_energy_means": [
+          17.67081351339962,
+          17.670607833909795,
+          17.665831669577795,
+          17.665540020352797
+        ],
+        "independent_virial_abs_max": [
+          0.00011797212710717986,
+          0.020608252391077997,
+          0.02946185786984401,
+          0.0015678240120955422
+        ],
+        "independent_energy_spreads": [
+          0.00012723491231270145,
+          0.00013599990150936492,
+          0.00012343817290627612,
+          0.00012256622925832517
+        ],
+        "passes_validation_gates": [
+          true,
+          false,
+          false,
+          true
+        ],
+        "passing_rungs": [
+          "linear_ladder_odd_constant_t1",
+          "linear_ladder_odd_shape_quadratic_t13"
+        ],
+        "lowest_passing_rung": "linear_ladder_odd_shape_quadratic_t13"
+      }
+    }
+  },
+  "validation_summary": {
+    "all_checks_passed": true,
+    "checks": {
+      "su4_ess_fraction_gt_min": true,
+      "su4_structure_exact": true,
+      "su4_collision_regular": true,
+      "su4_virial_abs_lt_tol": true,
+      "su4_energy_spread_lt_tol": true,
+      "su4_linear_ladder_grid_monotone": true,
+      "su4_linear_ladder_has_passing_rung": true
+    },
+    "note": "The SU(2)/SU(3) radial finite-difference energies are external benchmarks only.  Training and evaluation use the same flexible Chebyshev ansatz and Sobol-Gaussian importance Monte Carlo estimator for every N."
+  }
+}
