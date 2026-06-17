@@ -1,0 +1,524 @@
+\documentclass[11pt]{article}
+\usepackage[margin=0.85in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,mathtools,bm}
+\usepackage{booktabs,longtable,array,tabularx}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{listings}
+\usepackage{caption}
+\usepackage{float}
+\usepackage{cite}
+\hypersetup{colorlinks=true,linkcolor=blue!60!black,urlcolor=blue!60!black,citecolor=blue!60!black}
+\emergencystretch=2em
+\sloppy
+
+\lstdefinestyle{code}{
+  basicstyle=\ttfamily\small,
+  breaklines=true,
+  columns=fullflexible,
+  keepspaces=true,
+  frame=single,
+  framerule=0.25pt,
+  backgroundcolor=\color{gray!5},
+  xleftmargin=0.5em,
+  xrightmargin=0.5em,
+  showstringspaces=false,
+  keywordstyle=\color{blue!60!black},
+  commentstyle=\color{green!40!black},
+  stringstyle=\color{orange!60!black}
+}
+\lstset{style=code}
+
+\newcommand{\Tr}{\operatorname{Tr}}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Var}{\operatorname{Var}}
+\newcommand{\Cov}{\operatorname{Cov}}
+\newcommand{\ess}{\operatorname{ESS}}
+\newcommand{\SU}{\mathrm{SU}}
+\newcommand{\A}{\mathcal A}
+\newcommand{\D}{\Delta}
+\newcommand{\veps}{\varepsilon}
+\newcommand{\norm}[1]{\left\lVert #1\right\rVert}
+\newcommand{\abs}[1]{\left\lvert #1\right\rvert}
+
+\title{Recommended Energy-Evaluation and Sampling Strategy for Neural Adjoint-Sector Variational Calculations}
+\author{Technical implementation note}
+\date{June 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+The current neural adjoint-sector ansatz is flexible enough to represent the best validated finite-dimensional state, but direct training on a fixed finite integration set lets the network exploit the sample rather than improve the continuum Rayleigh quotient.  The remedy is not simply to increase the number of fixed points.  For production, and especially for larger $N$, the energy should be evaluated with a state-adapted stochastic sampler whose points are refreshed during training and whose uncertainty is measured on independent chains.  This note recommends a concrete method: persistent, batched Hamiltonian Monte Carlo in traceless eigenvalue coordinates, sampling a lagged and possibly tempered version of the current adjoint norm density.  Current parameters are then evaluated by exact self-normalized reweighting from the lagged target for only a short inner optimization window.  The proposal is refreshed whenever the reweighting effective sample size falls, and final energies are measured with independent HMC ensembles.  Randomized Sobol--Gaussian importance sampling should remain a low-$N$ debugging and cross-check tool, not the main high-$N$ neural training estimator.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+\section{Executive recommendation}
+
+Use \textbf{persistent, state-adapted Hamiltonian Monte Carlo with lagged self-normalized reweighting}.  In practical terms:
+\begin{enumerate}[label=\textbf{R\arabic*.},leftmargin=*]
+\item Represent the eigenvalues by unconstrained coordinates $z\in\R^{N-1}$ with $\lambda=Bz$, where $B$ is an orthonormal basis for the traceless hyperplane.
+\item Freeze a recent parameter set $\bar\theta$ and sample a lagged density
+\begin{equation}
+ \pi_{\bar\theta,\beta}(z)\propto
+ \Delta(\lambda)^2\exp[-S_{\bar\theta}(\lambda)]
+ A_{\bar\theta}(\lambda)^\beta,
+ \qquad
+ A_\theta(\lambda)=\sum_i a_{\theta,i}(\lambda)^2,
+ \label{eq:lagged_beta_density}
+\end{equation}
+with HMC.  Use $\beta=1$ for ordinary norm-density evaluation; use $\beta=1/2$ for neural training when kinetic overfitting is visible; use $\beta=0$ occasionally as a stress test for low-amplitude/high-gradient regions.
+\item During a short inner optimization window, evaluate the exact current Rayleigh quotient by reweighting from $\pi_{\bar\theta,\beta}$ to the current norm density $\pi_{\theta,1}$.  The unknown HMC normalization cancels in the self-normalized ratio.
+\item Refresh the HMC sample pool after a small number of optimizer updates, or earlier if the relative effective sample size for the current parameters drops below a threshold.
+\item For final reported energies, use independent HMC ensembles targeting $\pi_{\theta,1}$ directly, with autocorrelation-corrected errors, independent-chain energy spread, virial checks, and effective-sample-size diagnostics.
+\end{enumerate}
+
+This method is the best balance of speed and accuracy for high $N$ in the current PyTorch code base.  It is faster and better adapted than random-walk Metropolis, less brittle than training a normalizing flow before the wavefunction is stable, and more scalable than deterministic grids or fixed Sobol clouds.  The implementation should be a custom batched HMC kernel in PyTorch rather than a general-purpose NUTS package: fixed-length HMC is easier to vectorize across hundreds or thousands of chains on GPU, and differentiating through the HMC trajectory is unnecessary.
+
+\section{The fixed-point failure mode}
+
+The adjoint profile is written
+\begin{equation}
+ q_i(\lambda)=e^{-S_\theta(\lambda)/2}a_{\theta,i}(\lambda),
+ \qquad
+ A_\theta(\lambda)=\sum_i a_{\theta,i}(\lambda)^2.
+ \label{eq:q_factor}
+\end{equation}
+The energy is an integral over the traceless eigenvalue hyperplane.  If the same finite point set is used for many neural updates, the optimizer is not minimizing the continuum functional.  It is minimizing a rational function of the parameters evaluated on that particular cloud.  A flexible network can then reduce the sampled kinetic term at the training points while producing large gradients between or away from them.  Independent virial and cross-sample checks reveal this as non-stationarity.
+
+This is not a small implementation detail.  The kinetic term contains derivatives of the profile.  A fixed point set only tests those derivatives at finitely many locations.  Increasing the number of points helps but does not remove the underlying overfitting mechanism if the same cloud is reused for many parameter updates.  The point set must change on the same timescale as the neural optimization, and the proposal distribution must overlap the current wavefunction well enough to give reliable gradient information.
+
+\section{Reduced energy and target densities}
+
+Let
+\begin{equation}
+ X=U\diag(\lambda_1,\ldots,\lambda_N)U^\dagger,
+ \qquad \sum_i\lambda_i=0.
+\end{equation}
+The reduced adjoint Rayleigh quotient has denominator density
+\begin{equation}
+ \D(\lambda)^2\sum_iq_{\theta,i}(\lambda)^2
+ =\D(\lambda)^2e^{-S_\theta(\lambda)}A_\theta(\lambda),
+\end{equation}
+where
+\begin{equation}
+ \D(\lambda)=\prod_{i<j}(\lambda_i-\lambda_j).
+\end{equation}
+The numerator density can be written in terms of the head $a_i$ and scalar action $S$ as
+\begin{align}
+ F_\theta(\lambda)=&\frac12\sum_{i,\mu}
+ \left(\partial_\mu a_{\theta,i}-\frac12a_{\theta,i}\partial_\mu S_\theta\right)^2
+ +\sum_{i<j}\frac{(a_{\theta,i}-a_{\theta,j})^2}{(\lambda_i-\lambda_j)^2}
+ +V(\lambda)A_\theta(\lambda),
+ \label{eq:Ftheta}
+\end{align}
+where $\mu$ runs over an orthonormal basis of the traceless hyperplane.  The Dirichlet energy density under the norm measure is
+\begin{equation}
+ e_\theta(\lambda)=\frac{F_\theta(\lambda)}{A_\theta(\lambda)}.
+ \label{eq:edir}
+\end{equation}
+The physical energy is therefore
+\begin{equation}
+ E_\theta=\E_{\lambda\sim\pi_{\theta,1}}[e_\theta(\lambda)],
+ \qquad
+ \pi_{\theta,1}(\lambda)\propto\D(\lambda)^2e^{-S_\theta(\lambda)}A_\theta(\lambda).
+ \label{eq:energy_target}
+\end{equation}
+
+For lagged sampling we use Eq.~\eqref{eq:lagged_beta_density}.  For samples $\lambda_s$ drawn from $\pi_{\bar\theta,\beta}$, the exact self-normalized estimate of the current energy is
+\begin{equation}
+ \widehat E(\theta\mid\bar\theta,\beta)=
+ \frac{\sum_s r_s(\theta;\bar\theta,\beta)e_\theta(\lambda_s)}{\sum_s r_s(\theta;\bar\theta,\beta)},
+ \label{eq:lagged_energy}
+\end{equation}
+where the unnormalized log weights are
+\begin{equation}
+ \log r_s=
+ -S_\theta(\lambda_s)+\log A_\theta(\lambda_s)
+ +S_{\bar\theta}(\lambda_s)-\beta\log A_{\bar\theta}(\lambda_s).
+ \label{eq:lagged_weights}
+\end{equation}
+The Vandermonde factor cancels between current and lagged densities.  The normalizing constant of the HMC target also cancels, so it does not need to be known.
+
+\section{Why HMC is the recommended sampler}
+
+\subsection{Comparison of available options}
+
+\begin{longtable}{p{0.22\linewidth}p{0.34\linewidth}p{0.34\linewidth}}
+\toprule
+Method & Strengths & Weaknesses \\
+\midrule
+Deterministic tensor grid & Excellent for $N=2,3,4$ low-dimensional debugging and matrix assembly. & Dimension is $N-1$; cost grows exponentially.  Fixed grids are easy for neural networks to overfit. \\
+Randomized Sobol--Gaussian proposal & Simple, reproducible, embarrassingly parallel, good independent check at small $N$. & Proposal mismatch worsens as $N$ and coupling increase.  Gradient ESS can be poor even when energy ESS is acceptable. \\
+Random-walk Metropolis & Easy to implement and exact in principle. & Diffusive mixing.  Step size must shrink rapidly with dimension; not a good high-$N$ production sampler. \\
+Normalizing flow & Can produce independent samples if trained well. & Flow must learn eigenvalue repulsion and tails; generic flows can fail near $\D=0$ unless boundary behavior is built in.  Training a flow adds a second hard optimization problem. \\
+MALA & Uses gradients and is simpler than HMC. & Still more diffusive than HMC; useful fallback if HMC is unstable. \\
+Fixed-length HMC & Gradient-informed long-distance proposals; vectorizes well; good high-dimensional scaling; no separate density model to train. & Requires step-size/mass adaptation and autocorrelation diagnostics. \\
+\bottomrule
+\end{longtable}
+
+HMC is the best first production choice because the target density is smooth inside a Weyl chamber and its log gradient is available by automatic differentiation.  Unlike random-walk Metropolis, HMC uses gradient information to move across typical sets in high dimension.  Unlike a normalizing flow, it does not require learning a new proposal density before the wavefunction itself is stable.
+
+\subsection{Why not NUTS as the default?}
+
+No-U-Turn sampling is excellent for many Bayesian inference problems, but the present training loop needs thousands of repeated target refreshes and benefits from GPU batching across many chains.  A dynamic-trajectory sampler has irregular control flow and is harder to vectorize.  A fixed-length HMC kernel with randomized trajectory length gives most of the benefit at much lower engineering complexity.  NUTS can be useful for low-$N$ final validation, but it should not be the default high-$N$ training sampler.
+
+\section{Coordinate representation and Weyl chambers}
+
+Use a fixed orthonormal embedding
+\begin{equation}
+ B:\R^{N-1}\to\{\lambda\in\R^N:\sum_i\lambda_i=0\},
+ \qquad
+ \lambda=Bz,
+ \qquad B^TB=I_{N-1},\quad B^T\mathbf 1=0.
+\end{equation}
+The HMC variables are $z$.  The log target is evaluated from $\lambda=Bz$.
+
+Because $\D(\lambda)^2$ vanishes at eigenvalue collisions, the target density has zero probability on chamber walls.  There are two safe conventions:
+\begin{enumerate}[label=(\alph*)]
+\item Sample the full hyperplane.  Chains initialized in different Weyl chambers will almost never cross chamber walls.  This is acceptable for Weyl-invariant energy observables.
+\item Initialize all chains in one ordered chamber and reject proposals that leave it.  The missing factor of $N!$ cancels in Rayleigh quotients and expectation values of Weyl-invariant observables.
+\end{enumerate}
+For reproducibility and high-$N$ stability, the one-chamber convention is recommended.  Initialize by drawing Gaussian $\lambda$, sorting it, subtracting its mean, and projecting back to $z=B^T\lambda$.  Do \emph{not} sort during leapfrog integration; sorting would introduce nondifferentiable label changes.  Instead, reject a proposal if any gap becomes nonpositive or if the log target is nonfinite.
+
+\section{HMC target and transition}
+
+For a frozen anchor parameter set $\bar\theta$ and tempering exponent $\beta$, define
+\begin{equation}
+ \log\pi_{\bar\theta,\beta}(z)
+ =2\sum_{i<j}\log|\lambda_i-\lambda_j|
+ -S_{\bar\theta}(\lambda)
+ +\beta\log A_{\bar\theta}(\lambda),
+ \qquad \lambda=Bz.
+ \label{eq:hmc_logpi}
+\end{equation}
+The HMC potential is
+\begin{equation}
+ U(z)=-\log\pi_{\bar\theta,\beta}(z).
+\end{equation}
+Use a diagonal mass matrix $M$.  Momentum is sampled as
+\begin{equation}
+ p\sim\mathcal N(0,M).
+\end{equation}
+The Hamiltonian for the Markov transition is
+\begin{equation}
+ \mathcal H(z,p)=U(z)+\frac12p^TM^{-1}p.
+\end{equation}
+A leapfrog trajectory with step size $\epsilon$ is
+\begin{align}
+ p&\leftarrow p-\frac\epsilon2\nabla U(z),\\
+ z&\leftarrow z+\epsilon M^{-1}p,\\
+ p&\leftarrow p-\epsilon\nabla U(z),\qquad\text{for intermediate steps},\\
+ p&\leftarrow p-\frac\epsilon2\nabla U(z),\qquad\text{at the end}.
+\end{align}
+The proposal is accepted with probability
+\begin{equation}
+ \min\{1,\exp[-\mathcal H(z',p')+\mathcal H(z,p)]\}.
+\end{equation}
+Reject immediately if the proposed point has a nonpositive ordered gap, nonfinite action, nonfinite log head norm, or absolute Hamiltonian error above a diagnostic divergence threshold.
+
+\section{Specific implementation plan in PyTorch}
+
+Create a new module such as
+\begin{center}
+\texttt{src/adjoint\_qm/hmc.py}.
+\end{center}
+Use PyTorch rather than a separate HMC package.  The model is already in PyTorch, and a custom batched HMC kernel is short, differentiates the log density with respect to $z$, and can run hundreds of chains on GPU.  Do not differentiate through HMC transitions.
+
+\subsection{Core functions}
+
+\begin{lstlisting}[language=Python]
+def adjoint_log_norm_density(
+    model,
+    z: torch.Tensor,
+    basis: torch.Tensor,
+    beta: float = 1.0,
+    ordered: bool = True,
+) -> torch.Tensor:
+    """Return log pi_{theta,beta}(z) up to an additive constant.
+
+    z has shape [n_chains, n-1].  basis has shape [n, n-1].
+    lambda = z @ basis.T has shape [n_chains, n].
+    """
+    lam = z @ basis.T
+
+    if ordered:
+        gaps = lam[:, :-1] - lam[:, 1:]
+        valid = torch.all(gaps > 0.0, dim=-1)
+    else:
+        valid = torch.ones(lam.shape[0], dtype=torch.bool, device=lam.device)
+
+    log_delta = log_abs_vandermonde(lam)  # sum_{i<j} log |lambda_i-lambda_j|
+    action = model.action(lam)
+    head = model.head(lam)
+    A = torch.sum(head * head, dim=-1).clamp_min(1.0e-300)
+
+    logp = 2.0 * log_delta - action + beta * torch.log(A)
+    return torch.where(valid & torch.isfinite(logp), logp, -torch.inf)
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python]
+def grad_potential(logp_fn, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Return U(z) and grad U(z) for a batch of chains."""
+    z_req = z.detach().clone().requires_grad_(True)
+    logp = logp_fn(z_req)
+    U = -logp
+    grad_U, = torch.autograd.grad(U.sum(), z_req)
+    return U.detach(), grad_U.detach()
+\end{lstlisting}
+
+\begin{lstlisting}[language=Python]
+def hmc_step(
+    z: torch.Tensor,
+    logp_fn,
+    step_size: float,
+    n_leapfrog: int,
+    mass: torch.Tensor,
+    rng: torch.Generator | None = None,
+) -> HMCStepResult:
+    """One batched fixed-length HMC transition."""
+    mass = mass.to(z)
+    inv_mass = 1.0 / mass
+    p0 = torch.randn(z.shape, dtype=z.dtype, device=z.device, generator=rng) * torch.sqrt(mass)
+
+    U0, grad_U = grad_potential(logp_fn, z)
+    K0 = 0.5 * torch.sum(p0 * p0 * inv_mass, dim=-1)
+
+    z_new = z.detach().clone()
+    p = p0.detach().clone() - 0.5 * step_size * grad_U
+
+    for ell in range(n_leapfrog):
+        z_new = z_new + step_size * p * inv_mass
+        U_new, grad_U = grad_potential(logp_fn, z_new)
+        if ell != n_leapfrog - 1:
+            p = p - step_size * grad_U
+
+    p = p - 0.5 * step_size * grad_U
+    p = -p
+
+    K_new = 0.5 * torch.sum(p * p * inv_mass, dim=-1)
+    log_accept = -(U_new + K_new) + (U0 + K0)
+    accept = torch.log(torch.rand_like(log_accept)) < log_accept.clamp(max=0.0)
+
+    z_out = torch.where(accept[:, None], z_new, z)
+    return HMCStepResult(z=z_out.detach(), accepted=accept.detach(), log_accept=log_accept.detach())
+\end{lstlisting}
+
+The actual code should also return the Hamiltonian error, divergence flags, minimum gap, and log-density values for diagnostics.
+
+\subsection{Adaptation}
+
+Use warm-up only for the frozen anchor target.  A simple robust schedule is:
+\begin{enumerate}[label=(\roman*)]
+\item Start from step size $\epsilon_0=0.02/\sqrt{N}$ for $g=1$ and tune automatically.
+\item During 100--300 warm-up transitions, use dual averaging to target acceptance $0.8$.
+\item Estimate a diagonal mass from the warm-up chain covariance in $z$ coordinates using Welford's online update.
+\item Freeze the step size and mass for production samples from that anchor.
+\item Randomize the leapfrog count, for example $L\sim\mathrm{Uniform}\{8,\ldots,24\}$, to reduce resonances.
+\end{enumerate}
+
+For early implementation, diagonal mass is enough.  Dense mass is $O(N^2)$ storage and $O(N^2)$ per leapfrog update in dimension $N-1$; it is not needed until diagonal mass clearly fails.
+
+\section{Lagged training loop}
+
+\subsection{Anchor-and-refresh structure}
+
+Let $\theta_k$ be the current neural parameters.  The training loop should be organized into windows.
+\begin{enumerate}[label=\textbf{Step \arabic*.},leftmargin=*]
+\item Set the anchor $\bar\theta\leftarrow\theta_k$ and make a detached copy of the model.
+\item Generate an HMC sample pool from $\pi_{\bar\theta,\beta}$.
+\item For at most $U_{\max}$ optimizer steps, evaluate Eq.~\eqref{eq:lagged_energy} on random minibatches from this pool and update the current parameters.
+\item After each update, compute relative reweighting ESS
+\begin{equation}
+ \ess_{\rm rel}=\frac{(\sum_s r_s)^2}{M\sum_s r_s^2}.
+\end{equation}
+Refresh immediately if $\ess_{\rm rel}<0.5$ for full neural refinement.  Use $0.7$ as a conservative default.
+\item Always refresh after $U_{\max}=5$ updates for hidden-layer neural refinement.  For final-layer-only refinement, $U_{\max}=10$ is acceptable.
+\end{enumerate}
+
+The crucial rule is that no neural component should see the same sample pool for hundreds of Adam updates.  A small amount of sample reuse is acceptable because Eq.~\eqref{eq:lagged_energy} is a valid fixed-proposal objective near the anchor.  Long reuse recreates the fixed-point overfitting problem.
+
+\subsection{Training objective}
+
+For samples from the anchor, compute
+\begin{equation}
+ \widehat E(\theta)=\sum_s\bar r_s e_\theta(\lambda_s),
+ \qquad
+ \bar r_s=\frac{r_s}{\sum_t r_t}.
+\end{equation}
+Differentiate this expression with respect to $\theta$ by automatic differentiation while treating the samples and the anchor quantities as constants.  This is not differentiating through the Markov chain.  It is ordinary differentiation of a self-normalized fixed-proposal Rayleigh quotient.
+
+For neural refinement from the validated linear state, add a trust-region penalty on a separate reference pool:
+\begin{equation}
+ \mathcal L_{\rm train}=\widehat E(\theta)
+ +\lambda_q\frac{\E_{\rm ref}\left[\sum_i(q_{\theta,i}-q_{0,i})^2\right]}{\E_{\rm ref}\left[\sum_iq_{0,i}^2\right]+\veps}
+ +\lambda_S\Var_{\rm ref}(S_\theta-S_0).
+\end{equation}
+The reference pool should also be generated from a state-adapted HMC target and refreshed periodically.  A 4096-point fixed Sobol reference cloud is too small for a global trust region.
+
+\section{Tempering to detect kinetic spikes}
+
+Pure norm-density sampling with $\beta=1$ is efficient for estimating an already smooth accepted state.  It can, however, undersample regions where $A_\theta$ is small but derivatives are large.  These regions can still contribute appreciably to the Dirichlet numerator.  To make neural training more robust, use tempered targets:
+\begin{equation}
+ \pi_{\bar\theta,\beta}\propto\D^2e^{-S_{\bar\theta}}A_{\bar\theta}^{\beta},
+ \qquad 0\le\beta\le1.
+\end{equation}
+Recommended choices are:
+\begin{center}
+\begin{tabular}{cl}
+\toprule
+$\beta$ & Use \\
+\midrule
+1 & Final norm-density evaluation; efficient for accepted states. \\
+1/2 & Default full-neural training target; samples more low-amplitude regions. \\
+0 & Occasional sentinel evaluation for kinetic spikes; not the main estimator unless ESS remains acceptable. \\
+\bottomrule
+\end{tabular}
+\end{center}
+For any fixed $\beta$, Eq.~\eqref{eq:lagged_weights} gives the exact reweighting to the physical norm density.  Therefore using $\beta<1$ does not bias the energy estimator; it changes the variance.  The run should record the reweighting ESS for each $\beta$.
+
+\section{Independent validation}
+
+Training estimates and final reported estimates must be separate.  For a final candidate $\theta_*$:
+\begin{enumerate}[label=(\roman*)]
+\item Run at least three independent HMC ensembles targeting $\pi_{\theta_*,1}$.
+\item Use no training samples in final validation.
+\item Record acceptance rate, divergence fraction, minimum gap statistics, integrated autocorrelation time, energy mean, virial residual, $p_2$, $p_4$, radial kinetic, angular kinetic, and effective sample size.
+\item Estimate uncertainty with batch means or an integrated-autocorrelation estimator.  The naive $\sigma/\sqrt{N}$ error is not enough for MCMC.
+\item Repeat an occasional $\beta=1/2$ reweighted validation.  It should agree with the $\beta=1$ validation within combined error bars.
+\end{enumerate}
+
+For batch means, divide each chain after burn-in into $B$ contiguous blocks.  Let $\bar E_b$ be the block means across all chains.  Then
+\begin{equation}
+ \widehat{\operatorname{SE}}(E)=
+ \sqrt{\frac{1}{B(B-1)}\sum_{b=1}^B(\bar E_b-\bar E)^2}.
+\end{equation}
+Use $B\ge 20$ if possible.
+
+\section{Suggested hyperparameters}
+
+The following are starting values, not final universal constants.
+
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+Setting & $N\le 8$ development & Larger-$N$ production start \\
+\midrule
+chains & 512 & 1024--4096 \\
+warm-up transitions & 200 & 300--800 \\
+production transitions per refresh & 20--50 & 10--30 \\
+leapfrog count & random 8--24 & random 12--32 \\
+target acceptance & 0.80 & 0.80--0.85 \\
+training $\beta$ & 0.5 for neural, 1 for linear & 0.5 initially \\
+validation $\beta$ & 1 plus 0.5 cross-check & 1 plus 0.5 cross-check \\
+max sample reuse & 5 neural updates & 3--5 neural updates \\
+refresh ESS threshold & 0.5--0.7 & 0.7 \\
+precision & float64 & float64 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+If the acceptance rate is below $0.65$, reduce the step size.  If it is above $0.95$ and autocorrelation is large, increase the step size or trajectory length.  If divergences occur, reduce the step size and inspect minimum eigenvalue gaps.
+
+\section{High-$N$ considerations}
+
+The dimension of the HMC state is $d=N-1$, not $N^2-1$, because the symmetry reduction has already been performed.  This makes high-$N$ sampling feasible.  The main costs are:
+\begin{enumerate}[label=(\roman*)]
+\item evaluating $\log|\D|$ and its gradients, naively $O(N^2)$;
+\item evaluating the angular kinetic term, also naively $O(N^2)$;
+\item differentiating the neural scalar and head functions with respect to eigenvalues.
+\end{enumerate}
+These costs are polynomial and GPU-vectorizable.  HMC is appropriate because its mixing degrades much more slowly with dimension than random-walk Metropolis.  The eventual large-$N$ bottleneck will probably be the angular kinetic evaluation, not HMC itself.  At that point the polynomial quotient acceleration for Chebyshev or polynomial heads should be implemented.
+
+For stronger coupling, use continuation in $g$.  Train and validate at $g$, then increase to $g+\delta g$, initialize the envelope tail coefficient with $2\sqrt{2g}/3$, and start HMC from the previous accepted chains.  If the ESS between adjacent couplings is poor, insert intermediate couplings.
+
+\section{Why not use a normalizing flow now?}
+
+A normalizing flow can be useful later as an independence proposal or HMC preconditioner.  It should not be the first replacement for fixed grids.  The eigenvalue target has exact zeroes at collisions from $\D^2$, quartic tails, and possible zeros of the adjoint head norm.  A generic flow must learn all of this.  If a flow is used as a variational density, it must reproduce the $\D^2$ boundary behavior; otherwise kinetic-energy derivatives involving $\log q_{\rm flow}-2\log|\D|$ become singular.  A safer later use is to train a flow as a proposal for an already known unnormalized target and keep exact importance weights.
+
+\section{Diagnostics to add to every training run}
+
+Every neural training history should record:
+\begin{enumerate}[label=(\roman*)]
+\item anchor id and number of times the sample pool has been reused;
+\item sampler type, $\beta$, number of chains, warm-up length, leapfrog range, step size, mass statistics;
+\item HMC acceptance rate and divergence fraction;
+\item relative reweighting ESS from anchor to current parameters;
+\item energy and virial on the training minibatch, full anchor pool, checkpoint pool, and final independent chains;
+\item train--validation energy gap;
+\item gradient norm and gradient ESS by parameter block;
+\item wavefunction distance from the accepted baseline;
+\item scalar-action deviation mean and variance;
+\item radial kinetic, angular kinetic, $\langle p_2\rangle$, and $\langle p_4\rangle$.
+\end{enumerate}
+A neural step should be regarded as a proposal.  It becomes a new accepted state only after it passes independent validation.
+
+\section{Testing plan}
+
+Before using HMC for the full neural model, add the following tests.
+
+\subsection{Sampler correctness}
+\begin{enumerate}[label=(\roman*)]
+\item Harmonic Gaussian test in $d=N-1$ dimensions: sample a known Gaussian target and reproduce $\langle z_iz_j\rangle$ and the exact energy.
+\item Reversibility test: run a leapfrog trajectory forward, flip momentum, run backward, and recover the initial state within tolerance.
+\item Hamiltonian error test: for small step size, $\Delta\mathcal H$ should scale approximately as $\epsilon^2$ over a fixed trajectory length.
+\item Chamber test: ordered-chain proposals with nonpositive gaps must be rejected, not sorted.
+\end{enumerate}
+
+\subsection{Physics validation}
+\begin{enumerate}[label=(\roman*)]
+\item $N=2,3$ radial benchmarks using HMC evaluation instead of Sobol evaluation.
+\item $N=4$ accepted linear state: HMC energy and virial must agree with existing independent Sobol validation within uncertainties.
+\item Zero-step neural bridge: HMC validation must reproduce the linear state.
+\item Deliberate fixed-cloud overfit test: a candidate known to fail under Sobol validation should also fail under independent HMC validation.
+\end{enumerate}
+
+\section{Recommended command-line interface}
+
+Add sampler options to the existing benchmark/training script or create a dedicated neural-training script.
+
+\begin{lstlisting}[language=bash]
+python scripts/train_sun_adjoint_neural_hmc.py \
+  --n 4 \
+  --coupling 1.0 \
+  --init-from linear_current \
+  --sampler hmc-lagged \
+  --train-beta 0.5 \
+  --validation-beta 1.0 \
+  --num-chains 1024 \
+  --hmc-warmup 300 \
+  --hmc-transitions-per-refresh 25 \
+  --leapfrog-min 8 \
+  --leapfrog-max 24 \
+  --target-accept 0.80 \
+  --max-sample-reuse 5 \
+  --anchor-refresh-ess 0.70 \
+  --trust-region-distance 1e-3 \
+  --validate-every 5 \
+  --independent-validation-chains 1024 \
+  --independent-validation-transitions 1000
+\end{lstlisting}
+
+For high $N$, increase the number of chains before increasing the trajectory length.  The chains are independent and vectorize naturally.
+
+\section{Bottom line}
+
+The recommended production estimator is not a fixed deterministic grid, not a permanently reused Sobol cloud, and not an immediately trained normalizing flow.  It is a state-adapted HMC estimator with lagged reweighting:
+\begin{equation}
+ \boxed{
+ \text{sample }\pi_{\bar\theta,\beta}\text{ by HMC, reweight exactly to }\pi_{\theta,1},\text{ refresh frequently, validate independently.}
+ }
+\end{equation}
+This directly addresses the current failure mode.  The point set is no longer fixed, the proposal follows the wavefunction as it changes, the reweighting remains mathematically controlled during short inner optimization windows, and final claims are supported by independent Markov-chain error estimates.  It is also the most plausible path to higher $N$, where deterministic grids and broad fixed proposals become ineffective.
+
+\end{document}

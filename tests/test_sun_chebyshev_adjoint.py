@@ -35,6 +35,7 @@ from adjoint_qm import (  # noqa: E402
     quartic_ray_wkb_tail,
     sobol_gaussian_traceless_samples,
     su3_adjoint_polar_eigenvalue_grid,
+    train_adjoint_importance,
     train_adjoint_vmc_metropolis,
 )
 from adjoint_qm.ansatz import _inverse_softplus  # noqa: E402
@@ -119,6 +120,55 @@ def test_shape_features_are_even_and_weyl_invariant() -> None:
             torch.abs(features - adjoint_shape_features(lam[:, perm], feature_scale=1.7))
         ).item()
         < 1.0e-12
+    )
+
+
+def test_importance_training_records_loss_every_step_but_sparse_diagnostics() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=3,
+        omega_init=1.0,
+        quartic_tail_init=0.1,
+        feature_mode="shape_quadratic",
+        hidden_layers=(4,),
+        head_hidden_layers=(4,),
+        chebyshev_degrees=(1, 3),
+        action_correction_scale=0.1,
+        head_correction_scale=0.1,
+        dtype=torch.float64,
+    )
+    samples = sobol_gaussian_traceless_samples(
+        3,
+        64,
+        sigma=1.0,
+        seed=12345,
+        dtype=torch.float64,
+    )
+
+    diagnostics, loss_history = train_adjoint_importance(
+        model,
+        samples.lam,
+        samples.log_prob,
+        coupling=0.05,
+        n_steps=5,
+        lr=1.0e-3,
+        report_every=2,
+        print_every=None,
+    )
+
+    assert [record.step for record in loss_history] == [1, 2, 3, 4, 5]
+    assert all(math.isfinite(record.loss) for record in loss_history)
+    assert [record.step for record in diagnostics] == [1, 2, 4, 5]
+    assert all(math.isfinite(record.energy) for record in diagnostics)
+    assert all(math.isfinite(record.tr_x2) for record in diagnostics)
+    assert all(math.isfinite(record.tr_x4) for record in diagnostics)
+    assert all(math.isfinite(record.kinetic) for record in diagnostics)
+    assert all(math.isfinite(record.virial_rhs) for record in diagnostics)
+    assert all(math.isfinite(record.virial_residual) for record in diagnostics)
+    assert all(
+        record.virial_residual
+        == pytest.approx(2.0 * record.kinetic - record.virial_rhs, abs=1.0e-12)
+        for record in diagnostics
     )
 
 

@@ -29,6 +29,7 @@ from adjoint_qm import (
     adjoint_importance_energy,
     adjoint_importance_moments,
     adjoint_importance_observables,
+    adjoint_profile_norm,
     adjoint_quadrature_energy,
     adjoint_quadrature_linear_impurity_eigenproblem,
     adjoint_quadrature_moments,
@@ -80,6 +81,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--proposal-sigma", type=float, default=1.0)
     parser.add_argument("--lr", type=float, default=1.0e-3)
     parser.add_argument("--report-every", type=int, default=50)
+    parser.add_argument(
+        "--print-every",
+        type=int,
+        default=10,
+        help=(
+            "Print the cheap full-flexible Adam loss every this many steps; "
+            "use 0 to disable progress printing. This does not control the "
+            "saved full-diagnostic cadence."
+        ),
+    )
     parser.add_argument("--envelope-lbfgs-max-iter", type=int, default=80)
     parser.add_argument("--include-linear-impurity-candidate", action="store_true")
     parser.add_argument("--include-linear-impurity-ladder", action="store_true")
@@ -417,6 +428,61 @@ def structure_payload(model: SUNAdjointChebyshevSpectralAnsatz) -> dict[str, flo
     }
 
 
+def _normalized_slice_direction(values: list[float]) -> torch.Tensor:
+    direction = torch.tensor(values, dtype=torch.float64)
+    direction = direction - torch.mean(direction)
+    norm = torch.linalg.vector_norm(direction)
+    if float(norm) <= 0.0:
+        raise ValueError("slice direction must be nonzero after centering")
+    return direction / norm
+
+
+def profile_slice_payload(
+    model: torch.nn.Module,
+    args: argparse.Namespace,
+) -> dict[str, Any] | None:
+    """Return normalized SU(4) profile slices for notebook inspection.
+
+    The full SU(4) profile depends on three independent eigenvalue coordinates.
+    This diagnostic records one-dimensional slices through the traceless
+    eigenvalue plane; it is not a full wavefunction representation.
+    """
+
+    if getattr(model, "n", None) != 4:
+        return None
+    norm_lam, norm_weights, norm_grid = envelope_training_grid(4)
+    with torch.no_grad():
+        norm = adjoint_profile_norm(model, norm_lam, norm_weights)
+        scale = 1.0 / torch.sqrt(norm)
+        radii = torch.linspace(-4.0, 4.0, 401, dtype=torch.float64)
+        directions = {
+            "pair split": _normalized_slice_direction([1.0, -1.0, 0.0, 0.0]),
+            "two-two split": _normalized_slice_direction([1.0, 1.0, -1.0, -1.0]),
+            "one-three split": _normalized_slice_direction([3.0, -1.0, -1.0, -1.0]),
+        }
+        slices: dict[str, Any] = {}
+        for label, direction in directions.items():
+            lam = radii[:, None] * direction[None, :]
+            raw_profile = model.profile(lam)
+            normalized_profile = scale * raw_profile
+            slices[label] = {
+                "direction": direction.tolist(),
+                "r": radii.tolist(),
+                "q_raw": raw_profile.tolist(),
+                "q_normalized": normalized_profile.tolist(),
+            }
+    return {
+        "description": (
+            "One-dimensional slices of q_i(lambda) through SU(4) traceless "
+            "eigenvalue space. q_normalized is divided by the deterministic "
+            "grid adjoint-profile norm for this candidate."
+        ),
+        "normalization_grid": norm_grid,
+        "profile_norm": float(norm.detach()),
+        "slices": slices,
+    }
+
+
 def eval_payload(
     model: SUNAdjointChebyshevSpectralAnsatz,
     args: argparse.Namespace,
@@ -577,6 +643,9 @@ def summarize_candidate(
         "combined_evaluation": combined,
         "structure_checks": structure_payload(model),
     }
+    profile_slices = profile_slice_payload(model, args)
+    if profile_slices is not None:
+        candidate["profile_slices"] = profile_slices
     candidate["passes_validation_gates"] = candidate_passes(candidate, args)
     return candidate
 
@@ -598,7 +667,7 @@ def train_importance_adam_candidate(
         dtype=torch.float64,
     )
     start = time.perf_counter()
-    history = train_adjoint_importance(
+    history, loss_history = train_adjoint_importance(
         model,
         train_samples.lam,
         train_samples.log_prob,
@@ -607,6 +676,7 @@ def train_importance_adam_candidate(
         n_steps=args.n_steps,
         lr=args.lr,
         report_every=args.report_every,
+        print_every=None if args.print_every == 0 else args.print_every,
     )
     wall_time = time.perf_counter() - start
     training_payload = {
@@ -618,6 +688,13 @@ def train_importance_adam_candidate(
             model,
             train_samples.lam,
             train_samples.log_prob,
+        ),
+        "loss_history": [record.__dict__ for record in loss_history],
+        "loss_history_description": (
+            "Per-step fixed-proposal Rayleigh quotient evaluated before the "
+            "Adam update.  Full observable diagnostics are stored separately "
+            "in the candidate history on report steps, including the virial "
+            "residual and its Tr X^2, Tr X^4, and kinetic ingredients."
         ),
         "wall_time_seconds": wall_time,
     }
@@ -655,8 +732,11 @@ def fit_envelope_lbfgs(
     )
 
     start = time.perf_counter()
+    history: list[dict[str, Any]] = []
+    closure_evaluations = 0
 
     def closure() -> torch.Tensor:
+        nonlocal closure_evaluations
         optimizer.zero_grad(set_to_none=True)
         energy, *_ = adjoint_quadrature_energy(
             model,
@@ -666,6 +746,17 @@ def fit_envelope_lbfgs(
             coupling=args.coupling,
         )
         energy.backward()
+        closure_evaluations += 1
+        history.append(
+            {
+                "step": closure_evaluations,
+                "energy": float(energy.detach()),
+                "alpha": float(model.alpha.detach()),
+                "cubic": float(model.cubic.detach()),
+                "coordinate_scale": float(model.coordinate_scale.detach()),
+                "stage": "envelope_lbfgs_closure",
+            }
+        )
         return energy
 
     optimizer.step(closure)
@@ -684,23 +775,24 @@ def fit_envelope_lbfgs(
         omega=args.omega,
         coupling=args.coupling,
     )
-    history = [
-        {
-            "step": args.envelope_lbfgs_max_iter,
-            "energy": obs.energy,
-            "radial": obs.radial,
-            "angular": obs.angular,
-            "potential": obs.potential,
-            "local_energy_std": obs.local_energy_std,
-            "virial_residual": moments.virial_residual,
-            "alpha": obs.alpha,
-            "cubic": obs.cubic,
-            "coordinate_scale": obs.coordinate_scale,
-        }
-    ]
+    final_record = {
+        "step": closure_evaluations + 1,
+        "energy": obs.energy,
+        "radial": obs.radial,
+        "angular": obs.angular,
+        "potential": obs.potential,
+        "local_energy_std": obs.local_energy_std,
+        "virial_residual": moments.virial_residual,
+        "alpha": obs.alpha,
+        "cubic": obs.cubic,
+        "coordinate_scale": obs.coordinate_scale,
+        "stage": "envelope_lbfgs_final_observables",
+    }
+    history.append(final_record)
     payload = {
         "grid": grid_metadata,
         "wall_time_seconds": wall_time,
+        "lbfgs_closure_evaluations": closure_evaluations,
     }
     return payload, history
 
@@ -952,9 +1044,10 @@ def make_linear_impurity_candidate(
         omega=args.omega,
         coupling=args.coupling,
     )
+    linear_step = envelope_history[-1]["step"] + 1
     history = envelope_history + [
         {
-            "step": args.envelope_lbfgs_max_iter + 1,
+            "step": linear_step,
             "energy": obs.energy,
             "radial": obs.radial,
             "angular": obs.angular,
@@ -965,6 +1058,7 @@ def make_linear_impurity_candidate(
             "cubic": obs.cubic,
             "coordinate_scale": obs.coordinate_scale,
             "linear_impurity_energy": result.energy,
+            "stage": "linear_impurity_gep_endpoint",
         }
     ]
     coefficient_payload = [
@@ -1257,9 +1351,10 @@ def train_linear_initialized_neural_candidate(
         omega=args.omega,
         coupling=args.coupling,
     )
+    linear_initialization_step = envelope_history[-1]["step"] + 1
     history = envelope_history + [
         {
-            "step": args.envelope_lbfgs_max_iter + 1,
+            "step": linear_initialization_step,
             "energy": initialized_obs.energy,
             "radial": initialized_obs.radial,
             "angular": initialized_obs.angular,
@@ -1280,7 +1375,7 @@ def train_linear_initialized_neural_candidate(
         model,
         n,
         args,
-        step=args.envelope_lbfgs_max_iter + 1,
+        step=linear_initialization_step,
         seed=args.seed + 4_000_000 * n,
     )
     initial_checkpoint["stage"] = "linear_neural_initialization_checkpoint"
@@ -1342,7 +1437,7 @@ def train_linear_initialized_neural_candidate(
                     model,
                     n,
                     args,
-                    step=args.envelope_lbfgs_max_iter + 1 + step,
+                    step=linear_initialization_step + step,
                     seed=args.seed + 4_000_000 * n + step,
                 )
                 checkpoint["stage"] = "multicloud_neural_refinement_checkpoint"
@@ -1361,7 +1456,7 @@ def train_linear_initialized_neural_candidate(
                     best_checkpoint_passed = True
                 history.append(
                     {
-                        "step": args.envelope_lbfgs_max_iter + 1 + step,
+                        "step": linear_initialization_step + step,
                         "training_energy_loss": float(loss.detach()),
                         "regularization_loss": float(regularization_loss.detach()),
                         "head_regularization_loss": float(
@@ -1601,6 +1696,7 @@ def train_one_n(n: int, args: argparse.Namespace) -> dict[str, Any]:
                 "passes_validation_gates": candidate["passes_validation_gates"],
                 "combined_evaluation": candidate["combined_evaluation"],
                 "training": candidate["training"],
+                "history": candidate["history"],
             }
             for candidate in candidates
         },
@@ -1757,6 +1853,8 @@ def main() -> None:
     invalid = [n for n in args.n_values if n < 2]
     if invalid:
         raise ValueError(f"invalid N values: {invalid}")
+    if args.print_every < 0:
+        raise ValueError("--print-every must be non-negative")
     if args.include_multicloud_candidate:
         if args.multicloud_steps < 1:
             raise ValueError("--multicloud-steps must be positive")

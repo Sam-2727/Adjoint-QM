@@ -1390,6 +1390,19 @@ class AdjointTrainingRecord:
     alpha: float
     cubic: float = 0.0
     coordinate_scale: float = 1.0
+    tr_x2: float = float("nan")
+    tr_x4: float = float("nan")
+    kinetic: float = float("nan")
+    virial_rhs: float = float("nan")
+    virial_residual: float = float("nan")
+
+
+@dataclass(frozen=True)
+class AdjointTrainingLossRecord:
+    """Cheap per-step optimizer loss record."""
+
+    step: int
+    loss: float
 
 
 @dataclass(frozen=True)
@@ -2526,6 +2539,13 @@ def train_adjoint_quadrature(
                 omega=omega,
                 coupling=coupling,
             )
+            moments = adjoint_quadrature_moments(
+                model,
+                lam,
+                weights,
+                omega=omega,
+                coupling=coupling,
+            )
             history.append(
                 AdjointTrainingRecord(
                     step=step,
@@ -2537,6 +2557,11 @@ def train_adjoint_quadrature(
                     alpha=obs.alpha,
                     cubic=obs.cubic,
                     coordinate_scale=obs.coordinate_scale,
+                    tr_x2=moments.tr_x2,
+                    tr_x4=moments.tr_x4,
+                    kinetic=moments.kinetic,
+                    virial_rhs=moments.virial_rhs,
+                    virial_residual=moments.virial_residual,
                 )
             )
     return history
@@ -2552,8 +2577,14 @@ def train_adjoint_importance(
     n_steps: int = 1000,
     lr: float = 1.0e-2,
     report_every: int = 100,
-) -> list[AdjointTrainingRecord]:
-    """Train the adjoint ansatz by a fixed-proposal Rayleigh quotient."""
+    print_every: int | None = None,
+) -> tuple[list[AdjointTrainingRecord], list[AdjointTrainingLossRecord]]:
+    """Train the adjoint ansatz by a fixed-proposal Rayleigh quotient.
+
+    The returned loss history records the Rayleigh quotient used for the
+    optimizer at every step.  The diagnostic history is intentionally sparser:
+    it recomputes observable splits only on report steps.
+    """
 
     if n_steps < 1:
         raise ValueError("n_steps must be positive")
@@ -2561,9 +2592,12 @@ def train_adjoint_importance(
         raise ValueError("lr must be positive")
     if report_every < 1:
         raise ValueError("report_every must be positive")
+    if print_every is not None and print_every < 1:
+        raise ValueError("print_every must be positive when provided")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     history: list[AdjointTrainingRecord] = []
+    loss_history: list[AdjointTrainingLossRecord] = []
     for step in range(1, n_steps + 1):
         optimizer.zero_grad(set_to_none=True)
         energy, _, _, _, _ = adjoint_importance_energy(
@@ -2573,11 +2607,32 @@ def train_adjoint_importance(
             omega=omega,
             coupling=coupling,
         )
+        loss_history.append(
+            AdjointTrainingLossRecord(
+                step=step,
+                loss=float(energy.detach()),
+            )
+        )
+        if print_every is not None and (
+            step == 1 or step % print_every == 0 or step == n_steps
+        ):
+            print(
+                f"SU({model.n}) Adam step {step}/{n_steps}: "
+                f"loss={float(energy.detach()):.12g}",
+                flush=True,
+            )
         energy.backward()
         optimizer.step()
 
         if step == 1 or step % report_every == 0 or step == n_steps:
             obs = adjoint_importance_observables(
+                model,
+                lam,
+                log_prob,
+                omega=omega,
+                coupling=coupling,
+            )
+            moments = adjoint_importance_moments(
                 model,
                 lam,
                 log_prob,
@@ -2595,9 +2650,14 @@ def train_adjoint_importance(
                     alpha=obs.alpha,
                     cubic=obs.cubic,
                     coordinate_scale=obs.coordinate_scale,
+                    tr_x2=moments.tr_x2,
+                    tr_x4=moments.tr_x4,
+                    kinetic=moments.kinetic,
+                    virial_rhs=moments.virial_rhs,
+                    virial_residual=moments.virial_residual,
                 )
             )
-    return history
+    return history, loss_history
 
 
 def train_adjoint_vmc_metropolis(
