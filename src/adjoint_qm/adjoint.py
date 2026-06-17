@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from itertools import permutations
 from math import pi, sqrt
@@ -817,6 +817,7 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         hidden_layers: Sequence[int] = (32, 32),
         head_hidden_layers: Sequence[int] = (32,),
         head_coefficient_mode: str = "full",
+        action_quadratic_mode: str = "explicit",
         action_correction_scale: float = 1.0,
         head_correction_scale: float = 1.0,
         alpha_floor: float = 1.0e-8,
@@ -850,6 +851,8 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             raise ValueError("head_correction_scale must be non-negative")
         if head_coefficient_mode not in {"anchored", "full"}:
             raise ValueError("head_coefficient_mode must be 'anchored' or 'full'")
+        if action_quadratic_mode not in {"explicit", "mlp"}:
+            raise ValueError("action_quadratic_mode must be 'explicit' or 'mlp'")
         if parity not in {"odd", "even"}:
             raise ValueError("parity must be 'odd' or 'even'")
         if not chebyshev_degrees:
@@ -873,13 +876,17 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         self.tail_eps = float(tail_eps)
         self.learn_scale = bool(learn_scale)
         self.head_coefficient_mode = head_coefficient_mode
+        self.action_quadratic_mode = action_quadratic_mode
         self.action_correction_scale = float(action_correction_scale)
         self.head_correction_scale = float(head_correction_scale)
 
         raw_alpha = _inverse_softplus(
             torch.as_tensor(omega_init - alpha_floor, dtype=dtype)
         )
-        self.raw_alpha = nn.Parameter(raw_alpha.clone().detach())
+        self.raw_alpha = nn.Parameter(
+            raw_alpha.clone().detach(),
+            requires_grad=action_quadratic_mode == "explicit",
+        )
         if quartic_tail_init == 0.0:
             raw_cubic = torch.as_tensor(-50.0, dtype=dtype)
         else:
@@ -913,8 +920,13 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             feature_count = 6
         else:
             feature_count = self.moment_cutoff - 1
+        action_feature_count = (
+            feature_count + 1
+            if self.action_quadratic_mode == "mlp"
+            else feature_count
+        )
         action_layers: list[nn.Module] = []
-        in_features = feature_count
+        in_features = action_feature_count
         for width in hidden_layers:
             action_layers.append(nn.Linear(in_features, int(width), dtype=dtype))
             action_layers.append(activation())
@@ -973,6 +985,8 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         return self.coordinate_scale * tangent_project(lam)
 
     def invariant_features(self, lam: torch.Tensor) -> torch.Tensor:
+        """Return Weyl-invariant features shared by action/head networks."""
+
         centered = self.spectral_coordinates(lam)
         if self.feature_mode == "shape":
             return adjoint_shape_features(
@@ -991,6 +1005,21 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             moment_cutoff=self.moment_cutoff,
         )
 
+    def action_features(self, lam: torch.Tensor) -> torch.Tensor:
+        """Return scalar-action MLP inputs.
+
+        In ``action_quadratic_mode="mlp"``, the raw quadratic invariant ``p2``
+        is appended so the MLP, rather than an explicit positive parameter,
+        carries the quadratic action dependence.
+        """
+
+        features = self.invariant_features(lam)
+        if self.action_quadratic_mode == "explicit":
+            return features
+        centered = self.spectral_coordinates(lam)
+        p2 = torch.sum(centered**2, dim=-1, keepdim=True)
+        return torch.cat([features, p2], dim=-1)
+
     def action(self, lam: torch.Tensor) -> torch.Tensor:
         """Return the even Weyl-invariant scalar action ``S_theta``."""
 
@@ -999,11 +1028,16 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
         centered = self.spectral_coordinates(lam)
         p2 = torch.sum(centered**2, dim=-1)
         quartic_tail = quartic_ray_wkb_tail(centered, eps=self.tail_eps)
-        return (
+        explicit_quadratic = (
             self.alpha * p2
+            if self.action_quadratic_mode == "explicit"
+            else torch.zeros_like(p2)
+        )
+        return (
+            explicit_quadratic
             + self.cubic * quartic_tail
             + self.action_correction_scale
-            * self.net(self.invariant_features(lam)).squeeze(-1)
+            * self.net(self.action_features(lam)).squeeze(-1)
         )
 
     def head_basis(self, lam: torch.Tensor) -> torch.Tensor:
@@ -1095,6 +1129,7 @@ class SUNAdjointChebyshevSpectralAnsatz(nn.Module):
             f"parity={self.parity}, "
             f"feature_mode={self.feature_mode}, "
             f"head_coefficient_mode={self.head_coefficient_mode}, "
+            f"action_quadratic_mode={self.action_quadratic_mode}, "
             f"alpha={float(self.alpha.detach()):.6g}, "
             f"cubic={float(self.cubic.detach()):.6g}, "
             f"cheb_scale={float(self.scale.detach()):.6g}, "
@@ -1403,6 +1438,11 @@ class AdjointTrainingLossRecord:
 
     step: int
     loss: float
+    error_energy_mean: float | None = None
+    error_energy_standard_error: float | None = None
+    error_energy_std_across_replicates: float | None = None
+    error_replicates: int = 0
+    error_sample_count_per_replicate: int = 0
 
 
 @dataclass(frozen=True)
@@ -2578,12 +2618,34 @@ def train_adjoint_importance(
     lr: float = 1.0e-2,
     report_every: int = 100,
     print_every: int | None = None,
+    error_batches: Sequence[tuple[torch.Tensor, torch.Tensor]] | None = None,
+    training_batch_factory: Callable[
+        [int], tuple[torch.Tensor, torch.Tensor]
+    ]
+    | None = None,
+    error_batch_factory: Callable[
+        [int], Sequence[tuple[torch.Tensor, torch.Tensor]]
+    ]
+    | None = None,
+    error_every: int = 1,
 ) -> tuple[list[AdjointTrainingRecord], list[AdjointTrainingLossRecord]]:
     """Train the adjoint ansatz by a fixed-proposal Rayleigh quotient.
 
     The returned loss history records the Rayleigh quotient used for the
     optimizer at every step.  The diagnostic history is intentionally sparser:
     it recomputes observable splits only on report steps.
+
+    When ``error_batches`` is supplied, each batch is an independent
+    ``(lam, log_prob)`` proposal sample set.  The loss history then also records
+    the mean and standard error of independent energy estimates on those sample
+    sets.
+    These estimates are diagnostics only; the optimizer still minimizes the
+    Rayleigh quotient on the primary training sample set.
+
+    When ``training_batch_factory`` is supplied, it is called with the current
+    Adam step and returns the proposal sample set used for that step's optimizer
+    loss.  This supports randomized-QMC refresh training while preserving the
+    same Rayleigh-quotient loss.
     """
 
     if n_steps < 1:
@@ -2594,48 +2656,137 @@ def train_adjoint_importance(
         raise ValueError("report_every must be positive")
     if print_every is not None and print_every < 1:
         raise ValueError("print_every must be positive when provided")
+    if error_every < 1:
+        raise ValueError("error_every must be positive")
+    if error_batches is not None and error_batch_factory is not None:
+        raise ValueError("provide either error_batches or error_batch_factory")
+
+    def validate_training_batch(
+        batch_lam: torch.Tensor,
+        batch_log_prob: torch.Tensor,
+    ) -> None:
+        if batch_lam.ndim != 2:
+            raise ValueError("training batch lambda values must be rank two")
+        if batch_log_prob.ndim != 1:
+            raise ValueError("training batch log probabilities must be rank one")
+        if batch_lam.shape[0] != batch_log_prob.shape[0]:
+            raise ValueError(
+                "training batch lambda and log probability counts must agree"
+            )
+
+    def validate_error_batches(
+        batches: Sequence[tuple[torch.Tensor, torch.Tensor]],
+    ) -> None:
+        if len(batches) < 2:
+            raise ValueError("at least two error batches are required")
+        for error_lam, error_log_prob in batches:
+            if error_lam.ndim != 2:
+                raise ValueError("error batch lambda values must be rank two")
+            if error_log_prob.ndim != 1:
+                raise ValueError("error batch log probabilities must be rank one")
+            if error_lam.shape[0] != error_log_prob.shape[0]:
+                raise ValueError(
+                    "error batch lambda and log probability counts must agree"
+                )
+
+    validate_training_batch(lam, log_prob)
+    if error_batches is not None:
+        validate_error_batches(error_batches)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     history: list[AdjointTrainingRecord] = []
     loss_history: list[AdjointTrainingLossRecord] = []
     for step in range(1, n_steps + 1):
+        if training_batch_factory is None:
+            step_lam = lam
+            step_log_prob = log_prob
+        else:
+            step_lam, step_log_prob = training_batch_factory(step)
+            validate_training_batch(step_lam, step_log_prob)
         optimizer.zero_grad(set_to_none=True)
         energy, _, _, _, _ = adjoint_importance_energy(
             model,
-            lam,
-            log_prob,
+            step_lam,
+            step_log_prob,
             omega=omega,
             coupling=coupling,
         )
-        loss_history.append(
-            AdjointTrainingLossRecord(
-                step=step,
-                loss=float(energy.detach()),
+        error_energy_mean: float | None = None
+        error_energy_standard_error: float | None = None
+        error_energy_std_across_replicates: float | None = None
+        error_replicates = 0
+        error_sample_count_per_replicate = 0
+        if (error_batches is not None or error_batch_factory is not None) and (
+            step == 1 or step % error_every == 0 or step == n_steps
+        ):
+            step_error_batches = error_batches
+            if error_batch_factory is not None:
+                step_error_batches = error_batch_factory(step)
+                validate_error_batches(step_error_batches)
+            if step_error_batches is None:
+                raise RuntimeError("internal error: missing error batches")
+            error_values: list[torch.Tensor] = []
+            for error_lam, error_log_prob in step_error_batches:
+                error_energy, _, _, _, _ = adjoint_importance_energy(
+                    model,
+                    error_lam,
+                    error_log_prob,
+                    omega=omega,
+                    coupling=coupling,
+                )
+                error_values.append(error_energy.detach())
+            stacked_errors = torch.stack(error_values)
+            error_mean_tensor = torch.mean(stacked_errors)
+            error_std_tensor = torch.std(stacked_errors, unbiased=True)
+            error_energy_mean = float(error_mean_tensor)
+            error_energy_std_across_replicates = float(error_std_tensor)
+            error_energy_standard_error = float(
+                error_std_tensor / sqrt(float(stacked_errors.numel()))
             )
+            error_replicates = int(stacked_errors.numel())
+            error_sample_count_per_replicate = int(
+                step_error_batches[0][0].shape[0]
+            )
+        loss_record = AdjointTrainingLossRecord(
+            step=step,
+            loss=float(energy.detach()),
+            error_energy_mean=error_energy_mean,
+            error_energy_standard_error=error_energy_standard_error,
+            error_energy_std_across_replicates=(
+                error_energy_std_across_replicates
+            ),
+            error_replicates=error_replicates,
+            error_sample_count_per_replicate=error_sample_count_per_replicate,
         )
+        loss_history.append(loss_record)
         if print_every is not None and (
             step == 1 or step % print_every == 0 or step == n_steps
         ):
-            print(
+            message = (
                 f"SU({model.n}) Adam step {step}/{n_steps}: "
-                f"loss={float(energy.detach()):.12g}",
-                flush=True,
+                f"loss={float(energy.detach()):.12g}"
             )
+            if loss_record.error_energy_standard_error is not None:
+                message += (
+                    f", eval={loss_record.error_energy_mean:.12g}"
+                    f" +/- {loss_record.error_energy_standard_error:.3g}"
+                )
+            print(message, flush=True)
         energy.backward()
         optimizer.step()
 
         if step == 1 or step % report_every == 0 or step == n_steps:
             obs = adjoint_importance_observables(
                 model,
-                lam,
-                log_prob,
+                step_lam,
+                step_log_prob,
                 omega=omega,
                 coupling=coupling,
             )
             moments = adjoint_importance_moments(
                 model,
-                lam,
-                log_prob,
+                step_lam,
+                step_log_prob,
                 omega=omega,
                 coupling=coupling,
             )

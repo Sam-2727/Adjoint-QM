@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import math
 from pathlib import Path
 import sys
@@ -39,7 +40,10 @@ from adjoint_qm import (  # noqa: E402
     train_adjoint_vmc_metropolis,
 )
 from adjoint_qm.ansatz import _inverse_softplus  # noqa: E402
-from run_sun_adjoint_vmc_benchmarks import linear_impurity_ladder_specs  # noqa: E402
+from run_sun_adjoint_vmc_benchmarks import (  # noqa: E402
+    linear_impurity_ladder_specs,
+    profile_slice_payload,
+)
 
 
 def shared_flexible_chebyshev_model(n: int) -> SUNAdjointChebyshevSpectralAnsatz:
@@ -123,6 +127,83 @@ def test_shape_features_are_even_and_weyl_invariant() -> None:
     )
 
 
+def test_mlp_quadratic_mode_moves_p2_into_action_network() -> None:
+    torch.set_default_dtype(torch.float64)
+    lam = torch.tensor(
+        [
+            [1.2, -0.3, -0.4, -0.5],
+            [0.9, 0.2, -0.7, -0.4],
+        ],
+        dtype=torch.float64,
+    )
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=2.0,
+        quartic_tail_init=0.0,
+        feature_mode="shape_quadratic",
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1,),
+        action_quadratic_mode="mlp",
+        action_correction_scale=1.0,
+        dtype=torch.float64,
+    )
+
+    centered = lam - torch.mean(lam, dim=-1, keepdim=True)
+    p2 = torch.sum(centered**2, dim=-1)
+    action_features = model.action_features(lam)
+    head_features = model.invariant_features(lam)
+
+    assert action_features.shape == (2, 7)
+    assert head_features.shape == (2, 6)
+    assert model.net[0].in_features == 7
+    assert model.head_net is not None
+    assert model.head_net[0].in_features == 6
+    assert model.raw_alpha.requires_grad is False
+    assert torch.max(torch.abs(action_features[:, -1] - p2)).item() < 1.0e-12
+    assert torch.max(torch.abs(model.action(lam))).item() < 1.0e-12
+
+    with torch.no_grad():
+        final = model.net[-1]
+        assert isinstance(final, torch.nn.Linear)
+        final.weight.zero_()
+        final.bias.zero_()
+        final.weight[0, -1] = 0.75
+
+    assert torch.max(torch.abs(model.action(lam) - 0.75 * p2)).item() < 1.0e-12
+
+
+def test_explicit_quadratic_mode_keeps_p2_out_of_action_network() -> None:
+    torch.set_default_dtype(torch.float64)
+    lam = torch.tensor(
+        [
+            [1.2, -0.3, -0.4, -0.5],
+            [0.9, 0.2, -0.7, -0.4],
+        ],
+        dtype=torch.float64,
+    )
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=2.0,
+        quartic_tail_init=0.0,
+        feature_mode="shape_quadratic",
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1,),
+        action_quadratic_mode="explicit",
+        action_correction_scale=1.0,
+        dtype=torch.float64,
+    )
+
+    centered = lam - torch.mean(lam, dim=-1, keepdim=True)
+    p2 = torch.sum(centered**2, dim=-1)
+
+    assert model.action_features(lam).shape == (2, 6)
+    assert model.net[0].in_features == 6
+    assert model.raw_alpha.requires_grad is True
+    assert torch.max(torch.abs(model.action(lam) - 2.0 * p2)).item() < 1.0e-10
+
+
 def test_importance_training_records_loss_every_step_but_sparse_diagnostics() -> None:
     torch.set_default_dtype(torch.float64)
     model = SUNAdjointChebyshevSpectralAnsatz(
@@ -144,6 +225,16 @@ def test_importance_training_records_loss_every_step_but_sparse_diagnostics() ->
         seed=12345,
         dtype=torch.float64,
     )
+    error_batches = []
+    for replicate in range(2):
+        error_samples = sobol_gaussian_traceless_samples(
+            3,
+            32,
+            sigma=1.0,
+            seed=22345 + replicate,
+            dtype=torch.float64,
+        )
+        error_batches.append((error_samples.lam, error_samples.log_prob))
 
     diagnostics, loss_history = train_adjoint_importance(
         model,
@@ -154,10 +245,26 @@ def test_importance_training_records_loss_every_step_but_sparse_diagnostics() ->
         lr=1.0e-3,
         report_every=2,
         print_every=None,
+        error_batches=error_batches,
     )
 
     assert [record.step for record in loss_history] == [1, 2, 3, 4, 5]
     assert all(math.isfinite(record.loss) for record in loss_history)
+    assert all(record.error_replicates == 2 for record in loss_history)
+    assert all(
+        record.error_sample_count_per_replicate == 32
+        for record in loss_history
+    )
+    assert all(
+        record.error_energy_mean is not None
+        and math.isfinite(record.error_energy_mean)
+        for record in loss_history
+    )
+    assert all(
+        record.error_energy_standard_error is not None
+        and math.isfinite(record.error_energy_standard_error)
+        for record in loss_history
+    )
     assert [record.step for record in diagnostics] == [1, 2, 4, 5]
     assert all(math.isfinite(record.energy) for record in diagnostics)
     assert all(math.isfinite(record.tr_x2) for record in diagnostics)
@@ -169,6 +276,87 @@ def test_importance_training_records_loss_every_step_but_sparse_diagnostics() ->
         record.virial_residual
         == pytest.approx(2.0 * record.kinetic - record.virial_rhs, abs=1.0e-12)
         for record in diagnostics
+    )
+
+
+def test_importance_training_can_refresh_proposal_clouds() -> None:
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=3,
+        omega_init=1.0,
+        quartic_tail_init=0.1,
+        feature_mode="shape_quadratic",
+        hidden_layers=(4,),
+        head_hidden_layers=(4,),
+        chebyshev_degrees=(1, 3),
+        action_correction_scale=0.1,
+        head_correction_scale=0.1,
+        dtype=torch.float64,
+    )
+    initial_samples = sobol_gaussian_traceless_samples(
+        3,
+        32,
+        sigma=1.0,
+        seed=32345,
+        dtype=torch.float64,
+    )
+    training_calls: list[int] = []
+    error_calls: list[int] = []
+
+    def training_batch_factory(step: int) -> tuple[torch.Tensor, torch.Tensor]:
+        training_calls.append(step)
+        samples = sobol_gaussian_traceless_samples(
+            3,
+            32,
+            sigma=1.0,
+            seed=33345 + step,
+            dtype=torch.float64,
+        )
+        return samples.lam, samples.log_prob
+
+    def error_batch_factory(
+        step: int,
+    ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+        error_calls.append(step)
+        batches = []
+        for replicate in range(2):
+            samples = sobol_gaussian_traceless_samples(
+                3,
+                16,
+                sigma=1.0,
+                seed=34345 + 10 * step + replicate,
+                dtype=torch.float64,
+            )
+            batches.append((samples.lam, samples.log_prob))
+        return batches
+
+    diagnostics, loss_history = train_adjoint_importance(
+        model,
+        initial_samples.lam,
+        initial_samples.log_prob,
+        coupling=0.05,
+        n_steps=4,
+        lr=1.0e-3,
+        report_every=2,
+        print_every=None,
+        training_batch_factory=training_batch_factory,
+        error_batch_factory=error_batch_factory,
+        error_every=1,
+    )
+
+    assert training_calls == [1, 2, 3, 4]
+    assert error_calls == [1, 2, 3, 4]
+    assert [record.step for record in loss_history] == [1, 2, 3, 4]
+    assert [record.step for record in diagnostics] == [1, 2, 4]
+    assert all(math.isfinite(record.loss) for record in loss_history)
+    assert all(record.error_replicates == 2 for record in loss_history)
+    assert all(
+        record.error_sample_count_per_replicate == 16
+        for record in loss_history
+    )
+    assert all(
+        record.error_energy_standard_error is not None
+        and math.isfinite(record.error_energy_standard_error)
+        for record in loss_history
     )
 
 
@@ -390,6 +578,35 @@ def test_chebyshev_ansatz_structure_and_generic_collision_identity() -> None:
     assert diagnostics.weyl_residual < 1.0e-12
     assert diagnostics.head_collision_ratio_max_abs < 10.0
     assert diagnostics.profile_collision_identity_residual < 1.0e-9
+
+
+def test_su4_profile_payload_records_shifted_scalar_action() -> None:
+    torch.set_default_dtype(torch.float64)
+    model = SUNAdjointChebyshevSpectralAnsatz(
+        n=4,
+        omega_init=1.0,
+        quartic_tail_init=0.2,
+        hidden_layers=(),
+        head_hidden_layers=(),
+        chebyshev_degrees=(1,),
+        scale_init=3.0,
+        dtype=torch.float64,
+    )
+
+    payload = profile_slice_payload(model, argparse.Namespace())
+    assert payload is not None
+
+    pair_split = payload["slices"]["pair split"]
+    radii = torch.tensor(pair_split["r"], dtype=torch.float64)
+    direction = torch.tensor(pair_split["direction"], dtype=torch.float64)
+    lam = radii[:, None] * direction[None, :]
+    action = model.action(lam).detach()
+    center_index = int(torch.argmin(torch.abs(radii)).detach())
+    shifted = action - action[center_index]
+
+    assert pair_split["action"] == pytest.approx(action.tolist())
+    assert pair_split["action_shifted"] == pytest.approx(shifted.tolist())
+    assert pair_split["action_shifted"][center_index] == pytest.approx(0.0, abs=1e-14)
 
 
 def test_linear_impurity_eigenproblem_reproduces_harmonic_adjoint_t1() -> None:

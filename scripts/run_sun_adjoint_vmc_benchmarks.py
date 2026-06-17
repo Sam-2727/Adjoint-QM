@@ -76,6 +76,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--n-steps", type=int, default=300)
     parser.add_argument("--n-samples", type=int, default=16384)
+    parser.add_argument(
+        "--refresh-training-samples-every",
+        type=int,
+        default=0,
+        help=(
+            "Use a newly scrambled Sobol-Gaussian training sample set every K "
+            "Adam steps. The default 0 reuses one fixed training sample set. "
+            "Use 1 for independent randomized-QMC sample sets at every step."
+        ),
+    )
     parser.add_argument("--eval-samples", type=int, default=131072)
     parser.add_argument("--n-eval-replicates", type=int, default=3)
     parser.add_argument("--proposal-sigma", type=float, default=1.0)
@@ -89,6 +99,43 @@ def parse_args() -> argparse.Namespace:
             "Print the cheap full-flexible Adam loss every this many steps; "
             "use 0 to disable progress printing. This does not control the "
             "saved full-diagnostic cadence."
+        ),
+    )
+    parser.add_argument(
+        "--per-step-error-samples",
+        type=int,
+        default=0,
+        help=(
+            "If positive, evaluate independent scrambled Sobol-Gaussian "
+            "energy estimates with this many points per replicate for the "
+            "importance-adam loss history."
+        ),
+    )
+    parser.add_argument(
+        "--per-step-error-replicates",
+        type=int,
+        default=0,
+        help=(
+            "Number of independent per-step error replicates. Requires "
+            "--per-step-error-samples > 0."
+        ),
+    )
+    parser.add_argument(
+        "--per-step-error-every",
+        type=int,
+        default=1,
+        help=(
+            "Cadence for per-step independent error estimates when enabled. "
+            "Use 1 to store/print an error bar at every Adam step."
+        ),
+    )
+    parser.add_argument(
+        "--refresh-per-step-error-samples",
+        action="store_true",
+        help=(
+            "Use new independent scrambled Sobol-Gaussian sample sets for each "
+            "per-step error estimate instead of reusing fixed diagnostic "
+            "sample sets."
         ),
     )
     parser.add_argument("--envelope-lbfgs-max-iter", type=int, default=80)
@@ -144,6 +191,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parity", choices=["odd", "even"], default="odd")
     parser.add_argument("--chebyshev-degrees", type=int, nargs="+", default=None)
     parser.add_argument("--learn-coordinate-scale", action="store_true")
+    parser.add_argument(
+        "--action-quadratic-mode",
+        choices=["explicit", "mlp"],
+        default="explicit",
+        help=(
+            "Use 'explicit' for the standard positive alpha * Tr X^2 envelope "
+            "term, or 'mlp' to remove that explicit term and append Tr X^2 to "
+            "the scalar-action MLP inputs.  The 'mlp' mode is intended for "
+            "NN-only importance-adam experiments."
+        ),
+    )
     parser.add_argument("--action-correction-scale", type=float, default=0.25)
     parser.add_argument("--head-correction-scale", type=float, default=0.25)
     parser.add_argument(
@@ -231,6 +289,7 @@ def shared_ansatz_config(args: argparse.Namespace) -> dict[str, Any]:
         "learn_scale": False,
         "coordinate_scale_init": 1.0,
         "learn_coordinate_scale": args.learn_coordinate_scale,
+        "action_quadratic_mode": getattr(args, "action_quadratic_mode", "explicit"),
         "action_correction_scale": args.action_correction_scale,
         "head_correction_scale": args.head_correction_scale,
         "head_coefficient_mode": args.head_coefficient_mode,
@@ -258,6 +317,7 @@ def make_shared_model(
         learn_scale=config["learn_scale"],
         coordinate_scale_init=config["coordinate_scale_init"],
         learn_coordinate_scale=config["learn_coordinate_scale"],
+        action_quadratic_mode=config["action_quadratic_mode"],
         action_correction_scale=config["action_correction_scale"],
         head_correction_scale=config["head_correction_scale"],
         head_coefficient_mode=config["head_coefficient_mode"],
@@ -291,6 +351,7 @@ def make_linear_initialized_neural_model(
         learn_scale=config["learn_scale"],
         coordinate_scale_init=config["coordinate_scale_init"],
         learn_coordinate_scale=config["learn_coordinate_scale"],
+        action_quadratic_mode=config["action_quadratic_mode"],
         action_correction_scale=config["action_correction_scale"],
         head_correction_scale=config["head_correction_scale"],
         head_coefficient_mode=config["head_coefficient_mode"],
@@ -463,11 +524,16 @@ def profile_slice_payload(
         slices: dict[str, Any] = {}
         for label, direction in directions.items():
             lam = radii[:, None] * direction[None, :]
+            action = model.action(lam)
+            center_index = int(torch.argmin(torch.abs(radii)).detach())
+            action_shifted = action - action[center_index]
             raw_profile = model.profile(lam)
             normalized_profile = scale * raw_profile
             slices[label] = {
                 "direction": direction.tolist(),
                 "r": radii.tolist(),
+                "action": action.tolist(),
+                "action_shifted": action_shifted.tolist(),
                 "q_raw": raw_profile.tolist(),
                 "q_normalized": normalized_profile.tolist(),
             }
@@ -475,7 +541,11 @@ def profile_slice_payload(
         "description": (
             "One-dimensional slices of q_i(lambda) through SU(4) traceless "
             "eigenvalue space. q_normalized is divided by the deterministic "
-            "grid adjoint-profile norm for this candidate."
+            "grid adjoint-profile norm for this candidate. action is the "
+            "scalar S_theta(lambda) in exp[-S_theta/2]; action_shifted "
+            "subtracts S_theta at the slice point closest to r=0 so scalar "
+            "envelope shapes can be compared modulo irrelevant additive "
+            "constants."
         ),
         "normalization_grid": norm_grid,
         "profile_norm": float(norm.detach()),
@@ -666,6 +736,71 @@ def train_importance_adam_candidate(
         seed=args.seed + 100 * n,
         dtype=torch.float64,
     )
+    training_batch_factory = None
+    latest_training_batch: dict[str, tuple[torch.Tensor, torch.Tensor]] = {
+        "batch": (train_samples.lam, train_samples.log_prob)
+    }
+    latest_training_seed = {"seed": train_samples.seed}
+    if args.refresh_training_samples_every > 0:
+        training_cache: dict[str, Any] = {}
+
+        def training_batch_factory(
+            step: int,
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            refresh_index = (step - 1) // args.refresh_training_samples_every
+            if training_cache.get("refresh_index") != refresh_index:
+                seed = args.seed + 10_000 + 100_000 * n + refresh_index
+                refreshed = sobol_gaussian_traceless_samples(
+                    n,
+                    args.n_samples,
+                    sigma=args.proposal_sigma,
+                    seed=seed,
+                    dtype=torch.float64,
+                )
+                training_cache["refresh_index"] = refresh_index
+                training_cache["batch"] = (refreshed.lam, refreshed.log_prob)
+                training_cache["seed"] = refreshed.seed
+            latest_training_batch["batch"] = training_cache["batch"]
+            latest_training_seed["seed"] = training_cache["seed"]
+            return training_cache["batch"]
+
+    error_batches: list[tuple[torch.Tensor, torch.Tensor]] | None = None
+    error_batch_factory = None
+    if args.per_step_error_samples > 0 and args.per_step_error_replicates > 0:
+        if args.refresh_per_step_error_samples:
+
+            def error_batch_factory(
+                step: int,
+            ) -> list[tuple[torch.Tensor, torch.Tensor]]:
+                batches = []
+                for replicate in range(args.per_step_error_replicates):
+                    error_samples = sobol_gaussian_traceless_samples(
+                        n,
+                        args.per_step_error_samples,
+                        sigma=args.proposal_sigma,
+                        seed=(
+                            args.seed
+                            + 20_000
+                            + 1_000_000 * n
+                            + 10_000 * step
+                            + replicate
+                        ),
+                        dtype=torch.float64,
+                    )
+                    batches.append((error_samples.lam, error_samples.log_prob))
+                return batches
+
+        else:
+            error_batches = []
+            for replicate in range(args.per_step_error_replicates):
+                error_samples = sobol_gaussian_traceless_samples(
+                    n,
+                    args.per_step_error_samples,
+                    sigma=args.proposal_sigma,
+                    seed=args.seed + 20_000 + 1_000 * n + replicate,
+                    dtype=torch.float64,
+                )
+                error_batches.append((error_samples.lam, error_samples.log_prob))
     start = time.perf_counter()
     history, loss_history = train_adjoint_importance(
         model,
@@ -677,25 +812,43 @@ def train_importance_adam_candidate(
         lr=args.lr,
         report_every=args.report_every,
         print_every=None if args.print_every == 0 else args.print_every,
+        error_batches=error_batches,
+        training_batch_factory=training_batch_factory,
+        error_batch_factory=error_batch_factory,
+        error_every=args.per_step_error_every,
     )
     wall_time = time.perf_counter() - start
+    ess_lam, ess_log_prob = latest_training_batch["batch"]
     training_payload = {
-        "method": "fixed-proposal Adam on the full flexible ansatz",
+        "method": (
+            "refreshed scrambled Sobol-Gaussian Adam on the full flexible ansatz"
+            if args.refresh_training_samples_every > 0
+            else "fixed-proposal Adam on the full flexible ansatz"
+        ),
         "sample_count": args.n_samples,
         "seed": train_samples.seed,
+        "latest_training_seed": latest_training_seed["seed"],
+        "refresh_training_samples_every": args.refresh_training_samples_every,
         "proposal_sigma": train_samples.sigma,
         "effective_sample_size": effective_sample_size(
             model,
-            train_samples.lam,
-            train_samples.log_prob,
+            ess_lam,
+            ess_log_prob,
         ),
         "loss_history": [record.__dict__ for record in loss_history],
         "loss_history_description": (
             "Per-step fixed-proposal Rayleigh quotient evaluated before the "
             "Adam update.  Full observable diagnostics are stored separately "
             "in the candidate history on report steps, including the virial "
-            "residual and its Tr X^2, Tr X^4, and kinetic ingredients."
+            "residual and its Tr X^2, Tr X^4, and kinetic ingredients.  When "
+            "enabled, error_energy_* fields are independent scrambled "
+            "Sobol-Gaussian energy estimates on separate proposal sample sets; "
+            "they are diagnostics and are not used as the optimizer loss."
         ),
+        "per_step_error_samples": args.per_step_error_samples,
+        "per_step_error_replicates": args.per_step_error_replicates,
+        "per_step_error_every": args.per_step_error_every,
+        "refresh_per_step_error_samples": args.refresh_per_step_error_samples,
         "wall_time_seconds": wall_time,
     }
     return summarize_candidate(
@@ -834,7 +987,9 @@ def set_full_trainability(
     """Restore trainability for the flexible parameters enabled by CLI flags."""
 
     for parameter_name, parameter in model.named_parameters():
-        if parameter_name == "raw_scale":
+        if parameter_name == "raw_alpha" and model.action_quadratic_mode == "mlp":
+            parameter.requires_grad_(False)
+        elif parameter_name == "raw_scale":
             parameter.requires_grad_(False)
         elif parameter_name == "raw_feature_scale":
             parameter.requires_grad_(args.learn_feature_scale)
@@ -1855,6 +2010,29 @@ def main() -> None:
         raise ValueError(f"invalid N values: {invalid}")
     if args.print_every < 0:
         raise ValueError("--print-every must be non-negative")
+    if args.refresh_training_samples_every < 0:
+        raise ValueError("--refresh-training-samples-every must be non-negative")
+    if args.per_step_error_samples < 0:
+        raise ValueError("--per-step-error-samples must be non-negative")
+    if args.per_step_error_replicates < 0:
+        raise ValueError("--per-step-error-replicates must be non-negative")
+    if args.per_step_error_every < 1:
+        raise ValueError("--per-step-error-every must be positive")
+    if args.per_step_error_samples == 0 and args.per_step_error_replicates > 0:
+        raise ValueError(
+            "--per-step-error-samples must be positive when "
+            "--per-step-error-replicates is positive"
+        )
+    if args.per_step_error_samples > 0 and args.per_step_error_replicates < 2:
+        raise ValueError(
+            "--per-step-error-replicates must be at least two when per-step "
+            "error estimates are enabled"
+        )
+    if args.refresh_per_step_error_samples and args.per_step_error_samples == 0:
+        raise ValueError(
+            "--per-step-error-samples must be positive when refreshing "
+            "per-step error samples"
+        )
     if args.include_multicloud_candidate:
         if args.multicloud_steps < 1:
             raise ValueError("--multicloud-steps must be positive")
@@ -1897,6 +2075,12 @@ def main() -> None:
             )
     if args.include_hf_diagnostic and args.hf_delta <= 0:
         raise ValueError("--hf-delta must be positive")
+    if args.action_quadratic_mode == "mlp" and args.training_mode != "importance-adam":
+        raise ValueError(
+            "--action-quadratic-mode mlp is currently supported only for "
+            "--training-mode importance-adam, because the validated-candidates "
+            "paths use an explicit alpha * Tr X^2 envelope."
+        )
 
     results: dict[str, Any] = {
         "metadata": {
@@ -1951,9 +2135,18 @@ def main() -> None:
             "sampler": {
                 "algorithm": "scrambled Sobol Gaussian importance sampling in orthonormal traceless eigenvalue coordinates",
                 "n_train_samples": args.n_samples,
+                "refresh_training_samples_every": (
+                    args.refresh_training_samples_every
+                ),
                 "n_eval_samples": args.eval_samples,
                 "n_eval_replicates": args.n_eval_replicates,
                 "proposal_sigma": args.proposal_sigma,
+                "per_step_error_samples": args.per_step_error_samples,
+                "per_step_error_replicates": args.per_step_error_replicates,
+                "per_step_error_every": args.per_step_error_every,
+                "refresh_per_step_error_samples": (
+                    args.refresh_per_step_error_samples
+                ),
                 "independent_evaluation_samples": True,
             },
         },
